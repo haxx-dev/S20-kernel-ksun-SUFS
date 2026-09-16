@@ -1,0 +1,45 @@
+name: Build S20 Kernel (KernelSU-Next + SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc kmod cpio \
+            libssl-dev libncurses-dev rsync unzip zip python3
+
+      - name: Clone kernel source
+        run: git clone --depth=1 https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS.git kernel-source
+
+      - name: Clone Clang toolchain (r370808)
+        run: git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
+
+      - name: Clone GCC toolchain
+        run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
+
+      - name: Find NPU firmware config
+        working-directory: kernel-source
+        run: |
+          grep -rn "NPU_BUILTIN\|NPU.*FW\|firmware/npu" --include="*.mk" --include="Makefile" --include="Kconfig*" . | head -30
+
+      - name: Build kernel
+        working-directory: kernel-source
+        run: |
+          export CLANG_DIR=$GITHUB_WORKSPACE/tc/clang10
+          export GCC_DIR=$GITHUB_WORKSPACE/tc/gcc49
+          ./build.sh -m g980f
+
+      - name: Package with AnyKernel3
+        working-directory: kernel-source
+        run: ./mkzip.sh -m g980f
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-g980f-ksunext-susfs
+          path: kernel-source/*.zip
