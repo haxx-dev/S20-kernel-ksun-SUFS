@@ -29,6 +29,13 @@ jobs:
           export GCC_DIR=$GITHUB_WORKSPACE/tc/gcc49
           ./build.sh -m g980f
 
+          - name: Disable NPU firmware embedding
+        working-directory: kernel-source
+        run: |
+          sed -i 's/CONFIG_NPU_BUILTIN_FW=y/# CONFIG_NPU_BUILTIN_FW is not set/' arch/arm64/configs/exynos9830-x1slte_defconfig arch/arm64/configs/ksu.config 2>/dev/null || true
+          sed -i '/CONFIG_NPU_BUILTIN_FW/d' arch/arm64/configs/x1slte.config 2>/dev/null || true
+          echo "# CONFIG_NPU_BUILTIN_FW is not set" >> arch/arm64/configs/x1slte.config
+
       - name: Package with AnyKernel3
         working-directory: kernel-source
         run: ./mkzip.sh -m g980f
