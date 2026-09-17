@@ -20,9 +20,14 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           mkdir -p toolchain
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/main/clang-r488900 toolchain/clang
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 toolchain/gcc64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 toolchain/gcc32
+          
+          # Clona o Clang r488900 oficial via espelho no GitHub
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86_clang-r488900 toolchain/clang
+          
+          # Clona GCC para arquiteturas cruzadas (aarch64 e arm)
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 toolchain/gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_arm_arm-linux-androideabi-4.9 toolchain/gcc32
+
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
