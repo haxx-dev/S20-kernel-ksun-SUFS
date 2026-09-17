@@ -1,4 +1,4 @@
-name: Build S20 Kernel (KernelSU-Next + SUSFS)
+name: Build KernelSU Next + SUSFS (SM-G980F)
 
 on:
   workflow_dispatch:
@@ -6,42 +6,83 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - name: Install dependencies
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential flex bison bc kmod cpio \
-            libssl-dev libncurses-dev rsync unzip zip python3
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev libelf-dev libsqlite3-dev ccache zip curl git Python3
 
-      - name: Clone kernel source
-        run: git clone --depth=1 https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS.git kernel-source
-
-      - name: Clone Clang toolchain (r370808)
-        run: git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
-
-      - name: Clone GCC toolchain
-        run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
-
-      - name: Skip any firmware files that are missing from the repo
-        working-directory: kernel-source
+      - name: Download Toolchains
         run: |
-          sed -i '/^wordsize_deps := /i fw-external-y := $(foreach f,$(fw-external-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))\nfw-shipped-y := $(foreach f,$(fw-shipped-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))' firmware/Makefile
-          echo "=== trecho do Makefile depois da alteracao ==="
-          grep -n -A2 "^fw-external-y := \$(foreach" firmware/Makefile
+          cd $GITHUB_WORKSPACE
+          mkdir -p toolchain
+          # Clona Clang pré-construído do Google
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/main/clang-r488900 toolchain/clang
+          # Clona GCC para arquiteturas cruzadas (aarch64 e arm)
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 toolchain/gcc64
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 toolchain/gcc32
 
-      - name: Build kernel
-        working-directory: kernel-source
+      - name: Integrate KernelSU Next & SUSFS
         run: |
-          export CLANG_DIR=$GITHUB_WORKSPACE/tc/clang10
-          export GCC_DIR=$GITHUB_WORKSPACE/tc/gcc49
-          ./build.sh -m g980f
+          # 1. Instalar KernelSU Next
+          curl -LSs "https://raw.githubusercontent.com/rifs31/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-      - name: Package with AnyKernel3
-        working-directory: kernel-source
-        run: ./mkzip.sh -m g980f
+          # 2. Baixar os patches do SUSFS
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.4 susfs_src || true
+          
+          # Aplicar patches no kernel (Ajuste as rotas se seu kernel não for 4.19/5.4 padronizado)
+          cp -r susfs_src/kernel_patches/fs/* fs/ || true
+          cp -r susfs_src/kernel_patches/include/linux/* include/linux/ || true
 
-      - name: Upload flashable zip
+      - name: Build Kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc64/bin:$GITHUB_WORKSPACE/toolchain/gcc32/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+
+          # Gera a config padrão (defconfig do SM-G980F / Exynos990)
+          # Altere 'exynos990-g980f_defconfig' se o nome do seu defconfig for diferente
+          make O=out exynos990-g980f_defconfig
+
+          # Ativa flags necessárias no .config
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_KSU_SUSFS=y" >> out/.config
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> out/.config
+
+          # Compila a imagem
+          make -j$(nproc) O=out
+
+      - name: Verify Build Success
+        run: |
+          if [ -f "out/arch/arm64/boot/Image" ] || [ -f "out/arch/arm64/boot/Image.gz" ]; then
+            echo "Kernel compilado com sucesso!"
+          else
+            echo "Erro: Imagem do Kernel não encontrada!"
+            exit 1
+          fi
+
+      - name: Package Boot Image / Zip
+        run: |
+          mkdir -p artifact
+          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb artifact/
+          elif [ -f "out/arch/arm64/boot/Image.gz" ]; then
+            cp out/arch/arm64/boot/Image.gz artifact/
+          else
+            cp out/arch/arm64/boot/Image artifact/
+          fi
+          cd artifact && zip -r kernel-smg980f-ksunext-susfs.zip ./*
+
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-g980f-ksunext-susfs
-          path: kernel-source/*.zip
+          name: SM-G980F-KernelSU-Next-SUSFS
+          path: artifact/kernel-smg980f-ksunext-susfs.zip
