@@ -68,11 +68,8 @@ jobs:
         working-directory: kernel-source
         run: |
           export PATH="$GITHUB_WORKSPACE/tc/clang10/bin:$GITHUB_WORKSPACE/tc/gcc49/bin:$PATH"
-          export ARCH=arm64
-          export CC=clang
-          export CROSS_COMPILE=aarch64-linux-android-
-          make O=out exynos9830-x1slte_defconfig
-          make O=out -j$(nproc) CC=clang
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- exynos9830-x1slte_defconfig
+          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- -j$(nproc)
 
       - name: Upload build output
         uses: actions/upload-artifact@v4
