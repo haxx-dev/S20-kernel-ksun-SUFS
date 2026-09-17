@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 240
 
     steps:
@@ -17,22 +17,27 @@ jobs:
     - name: Instalar dependências
       run: |
         sudo apt-get update
-        sudo apt-get install -y bc bison flex build-essential libssl-dev \
-          python3 python3-pip zip wget curl git libelf-dev device-tree-compiler
-
-    - name: Baixar Clang (AOSP)
-      run: |
-        # Clang oficial do AOSP (prebuilt para kernels Android)
-        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz" -O clang.tar.gz
-        mkdir -p $HOME/toolchain
-        tar -xzf clang.tar.gz -C $HOME/toolchain
-        echo "$HOME/toolchain/bin" >> $GITHUB_PATH
-        $HOME/toolchain/bin/clang --version
+        sudo apt-get install -y build-essential flex bison bc kmod cpio \
+          libssl-dev libncurses-dev rsync unzip zip python3 wget curl git \
+          libelf-dev device-tree-compiler
 
     - name: Clonar kernel (LineageOS 23.2)
       run: |
         git clone --depth=1 -b lineage-23.2 \
           https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
+
+    - name: Baixar Clang (Nicklas373/aosp-clang r370808)
+      run: |
+        mkdir -p tc
+        git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
+        echo "Clang baixado:"
+        tc/clang10/bin/clang --version
+
+    - name: Baixar GCC (GrowtopiaJaw/aarch64-linux-android-4.9)
+      run: |
+        git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
+        echo "GCC baixado:"
+        tc/gcc49/bin/aarch64-linux-android-gcc --version | head -1
 
     - name: Verificar defconfig
       working-directory: ./kernel-source
@@ -40,15 +45,18 @@ jobs:
         DEFCONFIG="exynos990-x1s_defconfig"
         if [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
           echo "❌ Defconfig '$DEFCONFIG' não encontrada!"
-          ls -1 arch/arm64/configs/ | grep -i exynos990
+          echo "📋 Disponíveis (exynos):"
+          ls -1 arch/arm64/configs/ | grep -i exynos || ls -1 arch/arm64/configs/ | head -20
           exit 1
         fi
+        echo "✅ Defconfig OK: $DEFCONFIG"
         echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
 
     - name: Integrar KernelSU-Next
       working-directory: ./kernel-source
       run: |
         curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+        echo "✅ KernelSU-Next integrado"
 
     - name: Integrar SUSFS (kernel 4.19)
       working-directory: ./kernel-source
@@ -60,7 +68,7 @@ jobs:
         cp -r /tmp/susfs4ksu/kernel_patches/fs/* ./fs/ 2>/dev/null || true
         cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* ./include/linux/ 2>/dev/null || true
 
-        # Aplicar patch principal (|| true para não travar o workflow)
+        # Aplicar patch principal (|| true evita travar em rejects)
         patch -p1 --forward < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
 
         # Aplicar patch do KernelSU-Next (se existir)
@@ -68,8 +76,8 @@ jobs:
           [ -f "$p" ] && patch -p1 --forward < "$p" || true
         done
 
-        echo "📋 Rejeitos encontrados:"
-        find . -name "*.rej" -type f | head -10 || echo "Nenhum"
+        echo "📋 Rejeitos (se houver):"
+        find . -name "*.rej" -type f | head -20 || echo "Nenhum .rej"
 
     - name: Compilar kernel
       working-directory: ./kernel-source
@@ -77,25 +85,53 @@ jobs:
         ARCH: arm64
         SUBARCH: arm64
         CC: clang
-        CROSS_COMPILE: aarch64-linux-gnu-
-        CROSS_COMPILE_ARM32: arm-linux-gnueabi-
-        LLVM: 1
-        LLVM_IAS: 1
+        CLANG_TRIPLE: aarch64-linux-gnu-
+        CROSS_COMPILE: aarch64-linux-android-
+        CROSS_COMPILE_ARM32: arm-linux-androideabi-
       run: |
-        make O=out ARCH=arm64 "$DEFCONFIG"
+        # Caminhos absolutos das toolchains baixadas
+        CLANG_DIR="$GITHUB_WORKSPACE/tc/clang10"
+        GCC_DIR="$GITHUB_WORKSPACE/tc/gcc49"
+
+        export PATH="$CLANG_DIR/bin:$GCC_DIR/bin:$PATH"
+
+        echo "🔧 Clang em uso:"
+        which clang
+        clang --version | head -1
+        echo "🔧 GCC em uso:"
+        which aarch64-linux-android-gcc
+
+        echo "🛠️ Compilando com defconfig: $DEFCONFIG"
+
+        # Defconfig
+        make O=out ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          "$DEFCONFIG"
+
+        # Build
         make -j$(nproc) O=out ARCH=arm64 \
           CC=clang \
-          CROSS_COMPILE=aarch64-linux-gnu- \
-          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-          LLVM=1 LLVM_IAS=1
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi-
 
-        [ -f "out/arch/arm64/boot/Image" ] || exit 1
-        echo "✅ Kernel compilado"
+        if [ -f "out/arch/arm64/boot/Image" ]; then
+          echo "✅ Kernel Image gerada"
+          ls -la out/arch/arm64/boot/Image
+        else
+          echo "❌ Image não encontrada"
+          exit 1
+        fi
 
-    - name: Empacotar AnyKernel3
+    - name: Clonar AnyKernel3
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
         rm -rf anykernel/ak3-helper.sh anykernel/anykernel.sh anykernel/banner
+
+    - name: Empacotar Kernel com AnyKernel3
+      run: |
         cp kernel-source/out/arch/arm64/boot/Image anykernel/Image
 
         cd anykernel
@@ -109,4 +145,5 @@ jobs:
       with:
         name: Kernel-x1s-KSUN-SUSFS
         path: ${{ env.ZIP_NAME }}
+        if-no-files-found: error
         retention-days: 7
