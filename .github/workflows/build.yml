@@ -28,12 +28,12 @@ jobs:
         echo "📋 Defconfigs disponíveis:"
         ls -1 kernel-source/arch/arm64/configs/
 
-    - name: Baixar Clang (AOSP r510928)
+    - name: Baixar Clang (AOSP via LineageOS mirror)
       run: |
-        mkdir -p tc
-        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz" -O clang.tar.gz
         mkdir -p tc/clang
-        tar -xzf clang.tar.gz -C tc/clang
+        # Mirror oficial do LineageOS dos prebuilts do AOSP Clang
+        wget -q "https://github.com/LineageOS/prebuilts_clang_host_linux-x86/archive/refs/heads/lineage-23.2.tar.gz" -O clang.tar.gz
+        tar -xzf clang.tar.gz -C tc/clang --strip-components=1
         echo "✅ Clang baixado:"
         tc/clang/bin/clang --version | head -2
 
@@ -43,11 +43,6 @@ jobs:
         echo "📋 Conteúdo do bin do GCC:"
         ls tc/gcc49/bin/ | head -10
 
-    # ============================================================
-    # PATCH: pular firmwares externos missing
-    # Evita que o build quebre por arquivos de firmware que não
-    # existem na source (comum em kernels Samsung / Exynos)
-    # ============================================================
     - name: Patch firmware/Makefile (pular firmwares missing)
       working-directory: ./kernel-source
       run: |
