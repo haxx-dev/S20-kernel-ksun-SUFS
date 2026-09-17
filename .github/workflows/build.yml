@@ -25,8 +25,11 @@ jobs:
       - name: Find NPU firmware config
         working-directory: kernel-source
         run: |
-          grep -n "NPU.bin" firmware/Makefile
-          grep -rn "NPU\b" --include="*.mk" --include="Makefile" drivers/vision/npu/ | grep -i config | head -20
+          grep -rn "NPU.bin\|npu/NPU" --include="*.mk" --include="Makefile" . 2>/dev/null | head -20
+          echo "---"
+          find . -iname "*.mk" -path "*npu*"
+          echo "---"
+          cat drivers/vision/npu/Makefile 2>/dev/null | head -40
 
       - name: Build kernel
         working-directory: kernel-source
