@@ -28,12 +28,11 @@ jobs:
         echo "📋 Defconfigs disponíveis:"
         ls -1 kernel-source/arch/arm64/configs/
 
-    - name: Baixar Clang (AOSP via LineageOS mirror)
+    - name: Baixar Clang (AOSP r547379)
       run: |
         mkdir -p tc/clang
-        # Mirror oficial do LineageOS dos prebuilts do AOSP Clang
-        wget -q "https://github.com/LineageOS/prebuilts_clang_host_linux-x86/archive/refs/heads/lineage-23.2.tar.gz" -O clang.tar.gz
-        tar -xzf clang.tar.gz -C tc/clang --strip-components=1
+        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz" -O clang.tar.gz
+        tar -xzf clang.tar.gz -C tc/clang
         echo "✅ Clang baixado:"
         tc/clang/bin/clang --version | head -2
 
