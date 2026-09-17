@@ -24,7 +24,6 @@ jobs:
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
-          # 1. Instalar KernelSU Next
           curl -LSs "https://raw.githubusercontent.com/rifs31/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
           # 2. Baixar e copiar patches do SUSFS
