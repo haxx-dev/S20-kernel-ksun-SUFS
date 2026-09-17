@@ -1,26 +1,9 @@
-name: Build Kernel for LineageOS 23.2 - x1s (KSUN+SUSFS)
+name: Build Kernel x1s (LineageOS 23.2) - KSUN + SUSFS
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      defconfig:
-        description: 'Defconfig'
-        required: true
-        default: 'exynos990-x1s_defconfig'
-        type: string
-      clang_url:
-        description: 'Clang 下载链接'
-        required: true
-        default: 'https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang+llvm-19.1.7-x86_64-linux-gnu-ubuntu-22.04.tar.xz'
-        type: string
-
-env:
-  KERNEL_REPO: 'https://github.com/LineageOS/android_kernel_samsung_universal9830.git'
-  KERNEL_BRANCH: 'lineage-23.2'
-  DEFAULT_DEFCONFIG: 'exynos990-x1s_defconfig'
-  DEFAULT_CLANG_URL: 'https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang+llvm-19.1.7-x86_64-linux-gnu-ubuntu-22.04.tar.xz'
 
 jobs:
   build:
@@ -37,62 +20,56 @@ jobs:
         sudo apt-get install -y bc bison flex build-essential libssl-dev \
           python3 python3-pip zip wget curl git libelf-dev device-tree-compiler
 
-    - name: Baixar Clang
-      env:
-        CLANG_URL: ${{ github.event.inputs.clang_url || env.DEFAULT_CLANG_URL }}
+    - name: Baixar Clang (AOSP)
       run: |
-        echo "🔧 Baixando Clang de: $CLANG_URL"
-        wget -q "$CLANG_URL" -O clang.tar.xz
+        # Clang oficial do AOSP (prebuilt para kernels Android)
+        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz" -O clang.tar.gz
         mkdir -p $HOME/toolchain
-        tar -xf clang.tar.xz -C $HOME/toolchain --strip-components=1
+        tar -xzf clang.tar.gz -C $HOME/toolchain
         echo "$HOME/toolchain/bin" >> $GITHUB_PATH
         $HOME/toolchain/bin/clang --version
 
-    - name: Clonar kernel (lineage-23.2)
+    - name: Clonar kernel (LineageOS 23.2)
       run: |
-        git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel-source
-        cd kernel-source
-        echo "📋 Defconfigs disponíveis (exynos990):"
-        ls arch/arm64/configs/ | grep -i exynos990 || ls arch/arm64/configs/ | head -20
+        git clone --depth=1 -b lineage-23.2 \
+          https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
 
     - name: Verificar defconfig
       working-directory: ./kernel-source
-      env:
-        DEFCONFIG: ${{ github.event.inputs.defconfig || env.DEFAULT_DEFCONFIG }}
       run: |
-        echo "🔎 Verificando defconfig: $DEFCONFIG"
+        DEFCONFIG="exynos990-x1s_defconfig"
         if [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
           echo "❌ Defconfig '$DEFCONFIG' não encontrada!"
-          echo "📋 Disponíveis:"
-          ls -1 arch/arm64/configs/
+          ls -1 arch/arm64/configs/ | grep -i exynos990
           exit 1
         fi
-        echo "✅ Defconfig OK"
         echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
 
     - name: Integrar KernelSU-Next
       working-directory: ./kernel-source
       run: |
         curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-        echo "✅ KernelSU-Next integrado"
 
     - name: Integrar SUSFS (kernel 4.19)
       working-directory: ./kernel-source
       run: |
-        git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
+        git clone --depth=1 -b kernel-4.19 \
+          https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
+        # Copiar arquivos do SUSFS para a source
         cp -r /tmp/susfs4ksu/kernel_patches/fs/* ./fs/ 2>/dev/null || true
         cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* ./include/linux/ 2>/dev/null || true
 
+        # Aplicar patch principal (|| true para não travar o workflow)
         patch -p1 --forward < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
 
-        KSU_PATCH="/tmp/susfs4ksu/kernel_patches/next/kernel-patch-susfs-v*.patch"
-        for p in $KSU_PATCH; do
+        # Aplicar patch do KernelSU-Next (se existir)
+        for p in /tmp/susfs4ksu/kernel_patches/next/kernel-patch-susfs-v*.patch; do
           [ -f "$p" ] && patch -p1 --forward < "$p" || true
         done
 
-        echo "📋 Arquivos .rej gerados (se houver):"
-        find . -name "*.rej" -type f | head -10 || echo "Nenhum .rej"
+        echo "📋 Rejeitos encontrados:"
+        find . -name "*.rej" -type f | head -10 || echo "Nenhum"
 
     - name: Compilar kernel
       working-directory: ./kernel-source
@@ -105,7 +82,6 @@ jobs:
         LLVM: 1
         LLVM_IAS: 1
       run: |
-        echo "🛠️ Compilando com defconfig: $DEFCONFIG"
         make O=out ARCH=arm64 "$DEFCONFIG"
         make -j$(nproc) O=out ARCH=arm64 \
           CC=clang \
@@ -113,12 +89,8 @@ jobs:
           CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
           LLVM=1 LLVM_IAS=1
 
-        if [ -f "out/arch/arm64/boot/Image" ]; then
-          echo "✅ Kernel compilado com sucesso"
-        else
-          echo "❌ Image não encontrada"
-          exit 1
-        fi
+        [ -f "out/arch/arm64/boot/Image" ] || exit 1
+        echo "✅ Kernel compilado"
 
     - name: Empacotar AnyKernel3
       run: |
