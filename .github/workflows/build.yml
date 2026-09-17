@@ -1,91 +1,125 @@
-name: Build KernelSU Next + SUSFS (SM-G980F AOSP 16)
+name: Build Kernel for LineageOS 23.2 - x1s (KSUN+SUSFS)
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
+    inputs:
+      defconfig:
+        description: 'Defconfig'
+        required: true
+        default: 'exynos990-x1s_defconfig'
+        type: string
+      clang_url:
+        description: 'Clang 下载链接'
+        required: true
+        default: 'https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang+llvm-19.1.7-x86_64-linux-gnu-ubuntu-22.04.tar.xz'
+        type: string
+
+env:
+  KERNEL_REPO: 'https://github.com/LineageOS/android_kernel_samsung_universal9830.git'
+  KERNEL_BRANCH: 'lineage-23.2'
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
 
     steps:
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Setup Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev libelf-dev libsqlite3-dev ccache zip curl git python3
+    - name: Instalar dependências
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison flex build-essential libssl-dev \
+          python3 python3-pip zip wget curl git libelf-dev device-tree-compiler
 
-      - name: 🧰 Baixando Toolchain (Proton Clang Direto)
-        run: |
-          wget -q https://github.com/kdrag0n/proton-clang/archive/refs/heads/master.tar.gz -O proton.tar.gz
-          tar -xf proton.tar.gz
-          mv proton-clang-master toolchain
+    - name: Baixar Clang
+      run: |
+        wget -q "${{ github.event.inputs.clang_url }}" -O clang.tar.xz
+        mkdir -p $HOME/toolchain
+        tar -xf clang.tar.xz -C $HOME/toolchain --strip-components=1
+        echo "$HOME/toolchain/bin" >> $GITHUB_PATH
 
+    - name: Clonar kernel (lineage-23.2)
+      run: |
+        git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel-source
+        cd kernel-source
+        ls arch/arm64/configs/ | grep exynos990
 
-      - name: 🛡️ Clonar KernelSU Next na pasta drivers
-        run: |
-          # Remove a pasta caso ela tenha ficado corrompida na tentativa anterior
-          rm -rf drivers/kernelsu
-          
-          # Clona a branch correta usando o link HTTPS público oficial
-          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next.git drivers/kernelsu
+    - name: Verificar defconfig
+      working-directory: ./kernel-source
+      run: |
+        if [ ! -f "arch/arm64/configs/${{ github.event.inputs.defconfig }}" ]; then
+          echo "Defconfig não encontrada!"
+          ls -1 arch/arm64/configs/ | head -20
+          exit 1
+        fi
+        echo "DEFCONFIG=${{ github.event.inputs.defconfig }}" >> $GITHUB_ENV
 
+    - name: Integrar KernelSU-Next
+      working-directory: ./kernel-source
+      run: |
+        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-          # Adicionar drivers/kernelsu no Kconfig e Makefile do kernel (se já não estiver lá)
-          grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          grep -q "CONFIG_KSU" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+    - name: Integrar SUSFS (kernel 4.19)
+      working-directory: ./kernel-source
+      run: |
+        git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
-          # 2. Baixar e copiar patches do SUSFS
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.4 susfs_src || true
-          cp -r susfs_src/kernel_patches/fs/* fs/ || true
-          cp -r susfs_src/kernel_patches/include/linux/* include/linux/ || true
+        # 复制 SUSFS 文件
+        cp -r /tmp/susfs4ksu/kernel_patches/fs/* ./fs/ 2>/dev/null || true
+        cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* ./include/linux/ 2>/dev/null || true
 
-      - name: Build Kernel
-        run: |
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC=clang
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export LLVM=1
-          export LLVM_IAS=1
+        # 应用主补丁（允许失败）
+        patch -p1 --forward < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
 
-          # 1. Gera o .config base
-          # IMPORTANTE: Altere "exynos990-g980f_defconfig" se o nome na pasta arch/arm64/configs/ for outro
-          make O=out exynos990-g980f_defcobase
+        # 应用 KSU 补丁（允许失败）
+        KSU_PATCH="/tmp/susfs4ksu/kernel_patches/next/kernel-patch-susfs-v*.patch"
+        for p in $KSU_PATCH; do
+          patch -p1 --forward < "$p" || true
+        done
 
-          # 2. Ativa flags essenciais para KernelSU Next e SUSFS
-          echo "CONFIG_KSU=y" >> out/.config
-          echo "CONFIG_KSU_SUSFS=y" >> out/.config
-          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> out/.config
+        # 检查补丁失败情况
+        find . -name "*.rej" -type f | head -10 || echo "Nenhum .rej"
 
-          # 3. Compilação
-          make -j$(nproc) O=out
+    - name: Compilar kernel
+      working-directory: ./kernel-source
+      env:
+        ARCH: arm64
+        SUBARCH: arm64
+        CC: clang
+        CROSS_COMPILE: aarch64-linux-gnu-
+        CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        LLVM: 1
+        LLVM_IAS: 1
+      run: |
+        make O=out ARCH=arm64 "$DEFCONFIG"
+        make -j$(nproc) O=out ARCH=arm64 \
+          CC=clang \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          LLVM=1 LLVM_IAS=1
 
-      - name: Package with AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git AK3
+        [ -f "out/arch/arm64/boot/Image" ] || exit 1
+        echo "Kernel compilado"
 
-          # Procura a imagem copiada do build e move para o AnyKernel3
-          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
-            cp out/arch/arm64/boot/Image.gz-dtb AK3/Image.gz-dtb
-          elif [ -f "out/arch/arm64/boot/Image.gz" ]; then
-            cp out/arch/arm64/boot/Image.gz AK3/Image.gz
-          elif [ -f "out/arch/arm64/boot/Image" ]; then
-            cp out/arch/arm64/boot/Image AK3/Image
-          else
-            echo "Erro: Imagem do Kernel não encontrada em out/arch/arm64/boot/"
-            exit 1
-          fi
+    - name: Empacotar AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+        rm -rf anykernel/ak3-helper.sh anykernel/anykernel.sh anykernel/banner
+        cp kernel-source/out/arch/arm64/boot/Image anykernel/Image
 
-          cd AK3
-          sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.1\/by-name\/boot;/block=auto;/g' anykernel.sh
-          zip -r9 ../KernelSU-Next-SUSFS-SMG980F-AOSP16.zip ./* -x .git\* README.md *placeholder
+        cd anykernel
+        ZIP_NAME="Kernel-x1s-LOS23.2-KSUN-SUSFS-$(date +%Y%m%d).zip"
+        zip -r9 "$ZIP_NAME" * -x "*.zip"
+        echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+        mv "$ZIP_NAME" ../
 
-      - name: Upload Flashable Zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: KernelSU-Next-SUSFS-AOSP16-SMG980F
-          path: KernelSU-Next-SUSFS-SMG980F-AOSP16.zip
+    - name: Upload artefato
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-x1s-KSUN-SUSFS
+        path: ${{ env.ZIP_NAME }}
+        retention-days: 7
