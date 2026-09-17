@@ -23,10 +23,14 @@ jobs:
           mv proton-clang-master toolchain
 
 
-      - name: Integrate KernelSU Next & SUSFS
+      - name: 🛡️ Clonar KernelSU Next na pasta drivers
         run: |
-          # 1. Clonar KernelSU Next direto na pasta drivers
-          git clone https://github.com/rifs31/KernelSU-Next drivers/kernelsu -b next || git clone https://github.com/rifs31/KernelSU-Next drivers/kernelsu
+          # Remove a pasta caso ela tenha ficado corrompida na tentativa anterior
+          rm -rf drivers/kernelsu
+          
+          # Clona a branch correta usando o link HTTPS público oficial
+          git clone --depth=1 https://github.com/rifsxd/KernelSU-Next.git drivers/kernelsu
+
 
           # Adicionar drivers/kernelsu no Kconfig e Makefile do kernel (se já não estiver lá)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
