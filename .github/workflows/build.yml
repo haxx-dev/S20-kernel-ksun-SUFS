@@ -49,7 +49,7 @@ jobs:
 
           # 1. Gera o .config base
           # IMPORTANTE: Altere "exynos990-g980f_defconfig" se o nome na pasta arch/arm64/configs/ for outro
-          make O=out exynos990-g980f_defconfig
+          make O=out exynos990-g980f_defcobase
 
           # 2. Ativa flags essenciais para KernelSU Next e SUSFS
           echo "CONFIG_KSU=y" >> out/.config
