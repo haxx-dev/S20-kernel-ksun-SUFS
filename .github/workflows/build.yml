@@ -1,4 +1,4 @@
-name: Build KernelSU Next + SUSFS (AOSP Android 16 - SM-G980F)
+name: Build KernelSU Next + SUSFS (SM-G980F AOSP 16)
 
 on:
   workflow_dispatch:
@@ -16,76 +16,64 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses-dev libelf-dev libsqlite3-dev ccache zip curl git python3
 
-      - name: Download Toolchains
+      - name: Download Proton Clang Toolchain
         run: |
           cd $GITHUB_WORKSPACE
           mkdir -p toolchain
-          
-          # Clona o Clang r488900 oficial via espelho no GitHub
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86_clang-r488900 toolchain/clang
-          
-          # Clona GCC para arquiteturas cruzadas (aarch64 e arm)
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 toolchain/gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_arm_arm-linux-androideabi-4.9 toolchain/gcc32
-
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang toolchain/clang
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
-          # KernelSU Next Setup
+          # 1. Instalar KernelSU Next
           curl -LSs "https://raw.githubusercontent.com/rifs31/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-          # SUSFS Patches
+          # 2. Baixar e copiar patches do SUSFS
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.4 susfs_src || true
           cp -r susfs_src/kernel_patches/fs/* fs/ || true
           cp -r susfs_src/kernel_patches/include/linux/* include/linux/ || true
 
       - name: Build Kernel
         run: |
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc64/bin:$GITHUB_WORKSPACE/toolchain/gcc32/bin:$PATH
+          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export LLVM=1
+          export LLVM_IAS=1
 
-          # Defconfig AOSP do S20 Exynos (Altere o nome se no seu repo for diferente)
+          # 1. Gera o .config base
+          # IMPORTANTE: Altere "exynos990-g980f_defconfig" se a sua árvore AOSP usar outro nome na pasta arch/arm64/configs/
           make O=out exynos990-g980f_defconfig
 
-          # Configs essenciais para KSU Next + SUSFS
+          # 2. Ativa flags essenciais para KernelSU Next e SUSFS
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KSU_SUSFS=y" >> out/.config
           echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> out/.config
 
+          # 3. Compilação
           make -j$(nproc) O=out
 
       - name: Package with AnyKernel3
         run: |
-          # Clona o AnyKernel3
           git clone https://github.com/osm0sis/AnyKernel3.git AK3
-          
-          # Procura a imagem copiada do build e move para o AK3
+
+          # Procura a imagem copiada do build e move para o AnyKernel3
           if [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
             cp out/arch/arm64/boot/Image.gz-dtb AK3/Image.gz-dtb
           elif [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AK3/Image.gz
-          else
+          elif [ -f "out/arch/arm64/boot/Image" ]; then
             cp out/arch/arm64/boot/Image AK3/Image
+          else
+            echo "Erro: Imagem do Kernel não encontrada em out/arch/arm64/boot/"
+            exit 1
           fi
 
-          # Ajusta para a partição do SM-G980F no anykernel.sh
           cd AK3
           sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.1\/by-name\/boot;/block=auto;/g' anykernel.sh
           zip -r9 ../KernelSU-Next-SUSFS-SMG980F-AOSP16.zip ./* -x .git\* README.md *placeholder
-
-      - name: Verify Zip Creation
-        run: |
-          if [ -f "KernelSU-Next-SUSFS-SMG980F-AOSP16.zip" ]; then
-            echo "Zip do AnyKernel3 gerado com sucesso!"
-          else
-            echo "Erro ao gerar o Zip do AnyKernel3!"
-            exit 1
-          fi
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
