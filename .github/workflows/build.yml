@@ -25,6 +25,8 @@ jobs:
       run: |
         git clone --depth=1 -b lineage-23.2 \
           https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
+        echo "📋 Defconfigs disponíveis:"
+        ls -1 kernel-source/arch/arm64/configs/
 
     - name: Baixar Clang (Nicklas373/aosp-clang r370808)
       run: |
@@ -36,21 +38,43 @@ jobs:
     - name: Baixar GCC (GrowtopiaJaw/aarch64-linux-android-4.9)
       run: |
         git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
-        echo "GCC baixado:"
-        tc/gcc49/bin/aarch64-linux-android-gcc --version | head -1
+        echo "📋 Conteúdo do diretório bin do GCC:"
+        ls -la tc/gcc49/bin/ 2>/dev/null | head -20 || echo "Diretório bin não encontrado"
 
-    - name: Verificar defconfig
+    - name: Detectar defconfig
       working-directory: ./kernel-source
       run: |
-        DEFCONFIG="exynos990-x1s_defconfig"
-        if [ ! -f "arch/arm64/configs/$DEFCONFIG" ]; then
-          echo "❌ Defconfig '$DEFCONFIG' não encontrada!"
-          echo "📋 Disponíveis (exynos):"
-          ls -1 arch/arm64/configs/ | grep -i exynos || ls -1 arch/arm64/configs/ | head -20
+        # Lista de candidatos em ordem de prioridade
+        CANDIDATOS=(
+          "exynos9830_defconfig"
+          "exynos990-x1s_defconfig"
+          "exynos990_defconfig"
+          "x1s_defconfig"
+        )
+
+        DEFCONFIG_FINAL=""
+
+        for c in "${CANDIDATOS[@]}"; do
+          if [ -f "arch/arm64/configs/$c" ]; then
+            DEFCONFIG_FINAL="$c"
+            echo "✅ Defconfig encontrada: $DEFCONFIG_FINAL"
+            break
+          fi
+        done
+
+        # Fallback: primeira defconfig com "exynos" ou "x1s" no nome
+        if [ -z "$DEFCONFIG_FINAL" ]; then
+          DEFCONFIG_FINAL=$(ls arch/arm64/configs/ | grep -Ei 'exynos|x1s' | head -n1 || true)
+          [ -n "$DEFCONFIG_FINAL" ] && echo "✅ Defconfig por fallback: $DEFCONFIG_FINAL"
+        fi
+
+        if [ -z "$DEFCONFIG_FINAL" ]; then
+          echo "❌ Nenhuma defconfig encontrada!"
+          ls -1 arch/arm64/configs/
           exit 1
         fi
-        echo "✅ Defconfig OK: $DEFCONFIG"
-        echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
+
+        echo "DEFCONFIG=$DEFCONFIG_FINAL" >> $GITHUB_ENV
 
     - name: Integrar KernelSU-Next
       working-directory: ./kernel-source
@@ -64,14 +88,11 @@ jobs:
         git clone --depth=1 -b kernel-4.19 \
           https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
-        # Copiar arquivos do SUSFS para a source
         cp -r /tmp/susfs4ksu/kernel_patches/fs/* ./fs/ 2>/dev/null || true
         cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* ./include/linux/ 2>/dev/null || true
 
-        # Aplicar patch principal (|| true evita travar em rejects)
         patch -p1 --forward < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
 
-        # Aplicar patch do KernelSU-Next (se existir)
         for p in /tmp/susfs4ksu/kernel_patches/next/kernel-patch-susfs-v*.patch; do
           [ -f "$p" ] && patch -p1 --forward < "$p" || true
         done
@@ -81,25 +102,31 @@ jobs:
 
     - name: Compilar kernel
       working-directory: ./kernel-source
-      env:
-        ARCH: arm64
-        SUBARCH: arm64
-        CC: clang
-        CLANG_TRIPLE: aarch64-linux-gnu-
-        CROSS_COMPILE: aarch64-linux-android-
-        CROSS_COMPILE_ARM32: arm-linux-androideabi-
       run: |
-        # Caminhos absolutos das toolchains baixadas
         CLANG_DIR="$GITHUB_WORKSPACE/tc/clang10"
         GCC_DIR="$GITHUB_WORKSPACE/tc/gcc49"
 
+        # Detectar prefixo do GCC automaticamente
+        if [ -f "$GCC_DIR/bin/aarch64-linux-android-gcc" ]; then
+          GCC_PREFIX="aarch64-linux-android-"
+        elif [ -f "$GCC_DIR/bin/aarch64-linux-gnu-gcc" ]; then
+          GCC_PREFIX="aarch64-linux-gnu-"
+        else
+          echo "⚠️ Não foi possível detectar o prefixo do GCC. Listando:"
+          ls -la "$GCC_DIR/bin/" | head -20
+          # Fallback: extrai prefixo do primeiro *-gcc
+          GCC_PREFIX=$(basename $(ls $GCC_DIR/bin/*-gcc 2>/dev/null | head -1) | sed 's/gcc$//')
+          echo "Prefixo detectado por fallback: $GCC_PREFIX"
+        fi
+
         export PATH="$CLANG_DIR/bin:$GCC_DIR/bin:$PATH"
 
-        echo "🔧 Clang em uso:"
+        echo "🔧 Clang:"
         which clang
         clang --version | head -1
-        echo "🔧 GCC em uso:"
-        which aarch64-linux-android-gcc
+        echo "🔧 GCC (prefixo: $GCC_PREFIX):"
+        which ${GCC_PREFIX}gcc
+        ${GCC_PREFIX}gcc --version | head -1
 
         echo "🛠️ Compilando com defconfig: $DEFCONFIG"
 
@@ -107,15 +134,14 @@ jobs:
         make O=out ARCH=arm64 \
           CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE=${GCC_PREFIX} \
           "$DEFCONFIG"
 
         # Build
         make -j$(nproc) O=out ARCH=arm64 \
           CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=aarch64-linux-android- \
-          CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          CROSS_COMPILE=${GCC_PREFIX}
 
         if [ -f "out/arch/arm64/boot/Image" ]; then
           echo "✅ Kernel Image gerada"
