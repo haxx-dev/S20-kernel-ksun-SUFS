@@ -28,23 +28,36 @@ jobs:
         echo "📋 Defconfigs disponíveis:"
         ls -1 kernel-source/arch/arm64/configs/
 
-    - name: Baixar Clang (Nicklas373/aosp-clang r370808)
+    - name: Baixar Clang (AOSP r510928)
       run: |
         mkdir -p tc
-        git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
-        echo "Clang baixado:"
-        tc/clang10/bin/clang --version
+        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz" -O clang.tar.gz
+        mkdir -p tc/clang
+        tar -xzf clang.tar.gz -C tc/clang
+        echo "✅ Clang baixado:"
+        tc/clang/bin/clang --version | head -2
 
-    - name: Baixar GCC (GrowtopiaJaw/aarch64-linux-android-4.9)
+    - name: Baixar GCC 4.9 (GrowtopiaJaw)
       run: |
         git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
-        echo "📋 Conteúdo do diretório bin do GCC:"
-        ls -la tc/gcc49/bin/ 2>/dev/null | head -20 || echo "Diretório bin não encontrado"
+        echo "📋 Conteúdo do bin do GCC:"
+        ls tc/gcc49/bin/ | head -10
+
+    # ============================================================
+    # PATCH: pular firmwares externos missing
+    # Evita que o build quebre por arquivos de firmware que não
+    # existem na source (comum em kernels Samsung / Exynos)
+    # ============================================================
+    - name: Patch firmware/Makefile (pular firmwares missing)
+      working-directory: ./kernel-source
+      run: |
+        sed -i '/^wordsize_deps := /i fw-external-y := $(foreach f,$(fw-external-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))\nfw-shipped-y := $(foreach f,$(fw-shipped-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))' firmware/Makefile
+        echo "=== trecho do Makefile depois da alteracao ==="
+        grep -n -A2 "^fw-external-y := \$(foreach" firmware/Makefile
 
     - name: Detectar defconfig
       working-directory: ./kernel-source
       run: |
-        # Lista de candidatos em ordem de prioridade
         CANDIDATOS=(
           "exynos9830_defconfig"
           "exynos990-x1s_defconfig"
@@ -53,7 +66,6 @@ jobs:
         )
 
         DEFCONFIG_FINAL=""
-
         for c in "${CANDIDATOS[@]}"; do
           if [ -f "arch/arm64/configs/$c" ]; then
             DEFCONFIG_FINAL="$c"
@@ -62,15 +74,13 @@ jobs:
           fi
         done
 
-        # Fallback: primeira defconfig com "exynos" ou "x1s" no nome
         if [ -z "$DEFCONFIG_FINAL" ]; then
           DEFCONFIG_FINAL=$(ls arch/arm64/configs/ | grep -Ei 'exynos|x1s' | head -n1 || true)
-          [ -n "$DEFCONFIG_FINAL" ] && echo "✅ Defconfig por fallback: $DEFCONFIG_FINAL"
+          [ -n "$DEFCONFIG_FINAL" ] && echo "✅ Defconfig fallback: $DEFCONFIG_FINAL"
         fi
 
         if [ -z "$DEFCONFIG_FINAL" ]; then
           echo "❌ Nenhuma defconfig encontrada!"
-          ls -1 arch/arm64/configs/
           exit 1
         fi
 
@@ -103,41 +113,32 @@ jobs:
     - name: Compilar kernel
       working-directory: ./kernel-source
       run: |
-        CLANG_DIR="$GITHUB_WORKSPACE/tc/clang10"
+        CLANG_DIR="$GITHUB_WORKSPACE/tc/clang"
         GCC_DIR="$GITHUB_WORKSPACE/tc/gcc49"
 
-        # Detectar prefixo do GCC automaticamente
         if [ -f "$GCC_DIR/bin/aarch64-linux-android-gcc" ]; then
           GCC_PREFIX="aarch64-linux-android-"
         elif [ -f "$GCC_DIR/bin/aarch64-linux-gnu-gcc" ]; then
           GCC_PREFIX="aarch64-linux-gnu-"
         else
-          echo "⚠️ Não foi possível detectar o prefixo do GCC. Listando:"
-          ls -la "$GCC_DIR/bin/" | head -20
-          # Fallback: extrai prefixo do primeiro *-gcc
           GCC_PREFIX=$(basename $(ls $GCC_DIR/bin/*-gcc 2>/dev/null | head -1) | sed 's/gcc$//')
-          echo "Prefixo detectado por fallback: $GCC_PREFIX"
         fi
 
         export PATH="$CLANG_DIR/bin:$GCC_DIR/bin:$PATH"
 
         echo "🔧 Clang:"
-        which clang
         clang --version | head -1
         echo "🔧 GCC (prefixo: $GCC_PREFIX):"
-        which ${GCC_PREFIX}gcc
         ${GCC_PREFIX}gcc --version | head -1
 
         echo "🛠️ Compilando com defconfig: $DEFCONFIG"
 
-        # Defconfig
         make O=out ARCH=arm64 \
           CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu- \
           CROSS_COMPILE=${GCC_PREFIX} \
           "$DEFCONFIG"
 
-        # Build
         make -j$(nproc) O=out ARCH=arm64 \
           CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu- \
