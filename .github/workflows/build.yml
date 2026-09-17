@@ -25,12 +25,12 @@ jobs:
       - name: Find NPU firmware config
         working-directory: kernel-source
         run: |
-          grep -rn "NPU.bin\|npu/NPU" --include="*.mk" --include="Makefile" . 2>/dev/null | head -20
-          echo "---"
-          find . -iname "*.mk" -path "*npu*"
-          echo "---"
-          cat drivers/vision/npu/Makefile 2>/dev/null | head -40
-
+          echo "=== firmware/Makefile completo ==="
+          cat firmware/Makefile
+          echo "=== conteudo de firmware/npu ==="
+          ls -la firmware/npu/ 2>/dev/null
+          echo "=== busca case-insensitive ampla ==="
+          grep -rni "npu.bin" . 2>/dev/null | grep -v "\.git" | head -20
       - name: Build kernel
         working-directory: kernel-source
         run: |
