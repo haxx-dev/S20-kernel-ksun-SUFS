@@ -22,16 +22,12 @@ jobs:
       - name: Clone GCC toolchain
         run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
 
-      - name: Remove missing NPU firmware from CONFIG_EXTRA_FIRMWARE
+      - name: Skip any firmware files that are missing from the repo
         working-directory: kernel-source
         run: |
-          grep -rl "CONFIG_EXTRA_FIRMWARE" arch/arm64/configs/ | while read f; do
-            echo ">> Antes ($f):"
-            grep "CONFIG_EXTRA_FIRMWARE" "$f"
-            sed -i -E 's/([[:space:]"]|^)npu\/NPU\.bin([[:space:]"]|$)/\1\2/g' "$f"
-            echo ">> Depois ($f):"
-            grep "CONFIG_EXTRA_FIRMWARE" "$f"
-          done
+          sed -i '/^wordsize_deps := /i fw-external-y := $(foreach f,$(fw-external-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))\nfw-shipped-y := $(foreach f,$(fw-shipped-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))' firmware/Makefile
+          echo "=== trecho do Makefile depois da alteracao ==="
+          grep -n -A2 "^fw-external-y := \$(foreach" firmware/Makefile
 
       - name: Build kernel
         working-directory: kernel-source
