@@ -24,7 +24,12 @@ jobs:
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
-          curl -LSs "https://raw.githubusercontent.com/rifs31/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          # 1. Clonar KernelSU Next direto na pasta drivers
+          git clone https://github.com/rifs31/KernelSU-Next drivers/kernelsu -b next || git clone https://github.com/rifs31/KernelSU-Next drivers/kernelsu
+
+          # Adicionar drivers/kernelsu no Kconfig e Makefile do kernel (se já não estiver lá)
+          grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          grep -q "CONFIG_KSU" drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
           # 2. Baixar e copiar patches do SUSFS
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.4 susfs_src || true
@@ -43,7 +48,7 @@ jobs:
           export LLVM_IAS=1
 
           # 1. Gera o .config base
-          # IMPORTANTE: Altere "exynos990-g980f_defconfig" se a sua árvore AOSP usar outro nome na pasta arch/arm64/configs/
+          # IMPORTANTE: Altere "exynos990-g980f_defconfig" se o nome na pasta arch/arm64/configs/ for outro
           make O=out exynos990-g980f_defconfig
 
           # 2. Ativa flags essenciais para KernelSU Next e SUSFS
