@@ -1,170 +1,83 @@
-name: Build Kernel x1s (LineageOS 23.2) - KSUN + SUSFS
+name: Build S20 Kernel (LineageOS base + KernelSU-Next + SUSFS)
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc kmod cpio \
+            libssl-dev libncurses-dev rsync unzip zip python3
 
-    - name: Instalar dependências
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential flex bison bc kmod cpio \
-          libssl-dev libncurses-dev rsync unzip zip python3 wget curl git \
-          libelf-dev device-tree-compiler
+      - name: Clone correct kernel source (paired with LineageOS 23.2)
+        run: git clone --depth=1 -b lineage-23.2 https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
 
-    - name: Clonar kernel (LineageOS 23.2)
-      run: |
-        git clone --depth=1 -b lineage-23.2 \
-          https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
-        echo "📋 Defconfigs disponíveis:"
-        ls -1 kernel-source/arch/arm64/configs/
+      - name: Clone reference source (already has KernelSU-Next + SUSFS integrated)
+        run: git clone --depth=1 https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS.git patched-ref
 
-    - name: Baixar Clang (AOSP r547379 via GitHub mirror)
-      run: |
-        mkdir -p tc/clang
-        git clone --depth=1 -b clang-r547379 \
-          https://github.com/Neebe3289/android_prebuilts_clang_host_linux-x86.git tc/clang
-        echo "✅ Clang baixado:"
-        tc/clang/bin/clang --version | head -2
+      - name: Clone Clang toolchain (r370808)
+        run: git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
 
-    - name: Baixar GCC 4.9 (GrowtopiaJaw)
-      run: |
-        git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
-        echo "📋 Conteúdo do bin do GCC:"
-        ls tc/gcc49/bin/ | head -10
+      - name: Clone GCC toolchain
+        run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
 
-    - name: Patch firmware/Makefile (pular firmwares missing)
-      working-directory: ./kernel-source
-      run: |
-        sed -i '/^wordsize_deps := /i fw-external-y := $(foreach f,$(fw-external-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))\nfw-shipped-y := $(foreach f,$(fw-shipped-y),$(if $(wildcard $(fwabs)/$(f)),$(f)))' firmware/Makefile
-        echo "=== trecho do Makefile depois da alteracao ==="
-        grep -n -A2 "^fw-external-y := \$(foreach" firmware/Makefile
+      - name: Transplant KernelSU-Next + SUSFS files onto the correct base
+        run: |
+          cd kernel-source
 
-    - name: Detectar defconfig
-      working-directory: ./kernel-source
-      run: |
-        CANDIDATOS=(
-          "exynos9830_defconfig"
-          "exynos990-x1s_defconfig"
-          "exynos990_defconfig"
-          "x1s_defconfig"
-        )
+          # Pasta inteira do driver do KernelSU-Next
+          rm -rf KernelSU-Next
+          cp -r ../patched-ref/KernelSU-Next .
 
-        DEFCONFIG_FINAL=""
-        for c in "${CANDIDATOS[@]}"; do
-          if [ -f "arch/arm64/configs/$c" ]; then
-            DEFCONFIG_FINAL="$c"
-            echo "✅ Defconfig encontrada: $DEFCONFIG_FINAL"
-            break
+          # Arquivos do fs/ e include/ que o SUSFS + KSU modificam
+          for f in fs/Makefile fs/dcache.c fs/namei.c fs/namespace.c \
+                   fs/notify/fdinfo.c fs/overlayfs/inode.c fs/overlayfs/readdir.c fs/overlayfs/super.c \
+                   fs/proc/cmdline.c fs/proc/fd.c fs/proc/task_mmu.c fs/proc_namespace.c \
+                   fs/readdir.c fs/stat.c fs/statfs.c fs/susfs.c \
+                   fs/exec.c fs/open.c fs/read_write.c \
+                   include/linux/mount.h include/linux/sched.h \
+                   kernel/kallsyms.c kernel/sys.c \
+                   drivers/input/input.c; do
+            if [ -f "../patched-ref/$f" ]; then
+              mkdir -p "$(dirname "$f")"
+              cp "../patched-ref/$f" "$f"
+              echo "copiado: $f"
+            else
+              echo "AVISO: nao existe no patched-ref: $f"
+            fi
+          done
+
+          # Garante que o build system sabe compilar a pasta do KernelSU-Next
+          grep -q "KernelSU-Next" drivers/Makefile 2>/dev/null || echo 'obj-$(CONFIG_KSU) += KernelSU-Next/' >> drivers/Makefile
+          grep -q "KernelSU-Next" drivers/Kconfig 2>/dev/null || sed -i '/endmenu/i source "KernelSU-Next/Kconfig"' drivers/Kconfig
+
+          # Mescla as configs do ksu.config do repo de referencia na nossa
+          if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
+            cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
           fi
-        done
+          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
 
-        if [ -z "$DEFCONFIG_FINAL" ]; then
-          DEFCONFIG_FINAL=$(ls arch/arm64/configs/ | grep -Ei 'exynos|x1s' | head -n1 || true)
-          [ -n "$DEFCONFIG_FINAL" ] && echo "✅ Defconfig fallback: $DEFCONFIG_FINAL"
-        fi
+          echo "=== x1slte.config final ==="
+          cat arch/arm64/configs/x1slte.config
 
-        if [ -z "$DEFCONFIG_FINAL" ]; then
-          echo "❌ Nenhuma defconfig encontrada!"
-          exit 1
-        fi
+      - name: Build kernel
+        working-directory: kernel-source
+        run: |
+          export PATH="$GITHUB_WORKSPACE/tc/clang10/bin:$GITHUB_WORKSPACE/tc/gcc49/bin:$PATH"
+          export ARCH=arm64
+          export CC=clang
+          export CROSS_COMPILE=aarch64-linux-android-
+          make O=out exynos9830-x1slte_defconfig
+          make O=out -j$(nproc) CC=clang
 
-        echo "DEFCONFIG=$DEFCONFIG_FINAL" >> $GITHUB_ENV
-
-    - name: Integrar KernelSU-Next
-      working-directory: ./kernel-source
-      run: |
-        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-        echo "✅ KernelSU-Next integrado"
-
-    - name: Integrar SUSFS (kernel 4.19)
-      working-directory: ./kernel-source
-      run: |
-        git clone --depth=1 -b kernel-4.19 \
-          https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
-
-        cp -r /tmp/susfs4ksu/kernel_patches/fs/* ./fs/ 2>/dev/null || true
-        cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* ./include/linux/ 2>/dev/null || true
-
-        patch -p1 --forward < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-
-        for p in /tmp/susfs4ksu/kernel_patches/next/kernel-patch-susfs-v*.patch; do
-          [ -f "$p" ] && patch -p1 --forward < "$p" || true
-        done
-
-        echo "📋 Rejeitos (se houver):"
-        find . -name "*.rej" -type f | head -20 || echo "Nenhum .rej"
-
-    - name: Compilar kernel
-      working-directory: ./kernel-source
-      run: |
-        CLANG_DIR="$GITHUB_WORKSPACE/tc/clang"
-        GCC_DIR="$GITHUB_WORKSPACE/tc/gcc49"
-
-        if [ -f "$GCC_DIR/bin/aarch64-linux-android-gcc" ]; then
-          GCC_PREFIX="aarch64-linux-android-"
-        elif [ -f "$GCC_DIR/bin/aarch64-linux-gnu-gcc" ]; then
-          GCC_PREFIX="aarch64-linux-gnu-"
-        else
-          GCC_PREFIX=$(basename $(ls $GCC_DIR/bin/*-gcc 2>/dev/null | head -1) | sed 's/gcc$//')
-        fi
-
-        export PATH="$CLANG_DIR/bin:$GCC_DIR/bin:$PATH"
-
-        echo "🔧 Clang:"
-        clang --version | head -1
-        echo "🔧 GCC (prefixo: $GCC_PREFIX):"
-        ${GCC_PREFIX}gcc --version | head -1
-
-        echo "🛠️ Compilando com defconfig: $DEFCONFIG"
-
-        make O=out ARCH=arm64 \
-          CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=${GCC_PREFIX} \
-          "$DEFCONFIG"
-
-        make -j$(nproc) O=out ARCH=arm64 \
-          CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=${GCC_PREFIX}
-
-        if [ -f "out/arch/arm64/boot/Image" ]; then
-          echo "✅ Kernel Image gerada"
-          ls -la out/arch/arm64/boot/Image
-        else
-          echo "❌ Image não encontrada"
-          exit 1
-        fi
-
-    - name: Clonar AnyKernel3
-      run: |
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-        rm -rf anykernel/ak3-helper.sh anykernel/anykernel.sh anykernel/banner
-
-    - name: Empacotar Kernel com AnyKernel3
-      run: |
-        cp kernel-source/out/arch/arm64/boot/Image anykernel/Image
-
-        cd anykernel
-        ZIP_NAME="Kernel-x1s-LOS23.2-KSUN-SUSFS-$(date +%Y%m%d).zip"
-        zip -r9 "$ZIP_NAME" * -x "*.zip"
-        echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-        mv "$ZIP_NAME" ../
-
-    - name: Upload artefato
-      uses: actions/upload-artifact@v4
-      with:
-        name: Kernel-x1s-KSUN-SUSFS
-        path: ${{ env.ZIP_NAME }}
-        if-no-files-found: error
-        retention-days: 7
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-lineage-base-g980f
+          path: |
+            kernel-source/out/arch/arm64/boot/Image
+            kernel-source/out/.config
