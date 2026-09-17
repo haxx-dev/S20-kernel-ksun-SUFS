@@ -20,7 +20,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           mkdir -p toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang toolchain/clang
+          git clone --depth=1 https://github.com/jwinarske/clang_toolchain
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
