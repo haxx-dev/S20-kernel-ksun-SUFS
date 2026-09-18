@@ -27,6 +27,7 @@ jobs:
 
       - name: Transplant KernelSU-Next + SUSFS files onto the correct base
         run: |
+        run: |
           cd kernel-source
           rm -rf KernelSU-Next
           cp -r ../patched-ref/KernelSU-Next .
