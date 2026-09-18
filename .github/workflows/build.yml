@@ -19,8 +19,10 @@ jobs:
       - name: Clone reference source (already has KernelSU-Next + SUSFS integrated)
         run: git clone --depth=1 https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS.git patched-ref
 
-      - name: Clone Clang toolchain (r370808)
-        run: git clone --depth=1 -b r370808 https://github.com/Nicklas373/aosp-clang.git tc/clang10
+      - name: Download Clang toolchain (r370808)
+        run: |
+          mkdir -p tc/clang10
+          curl -L https://github.com/Nicklas373/aosp-clang/archive/refs/heads/r370808.tar.gz | tar xz --strip-components=1 -C tc/clang10
 
       - name: Clone GCC toolchain
         run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
