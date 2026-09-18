@@ -28,12 +28,9 @@ jobs:
       - name: Transplant KernelSU-Next + SUSFS files onto the correct base
         run: |
           cd kernel-source
-
-          # Pasta inteira do driver do KernelSU-Next
           rm -rf KernelSU-Next
           cp -r ../patched-ref/KernelSU-Next .
 
-          # Arquivos do fs/ e include/ que o SUSFS + KSU modificam
           for f in fs/Makefile fs/dcache.c fs/namei.c fs/namespace.c \
                    fs/notify/fdinfo.c fs/overlayfs/inode.c fs/overlayfs/readdir.c fs/overlayfs/super.c \
                    fs/proc/cmdline.c fs/proc/fd.c fs/proc/task_mmu.c fs/proc_namespace.c \
@@ -45,24 +42,20 @@ jobs:
             if [ -f "../patched-ref/$f" ]; then
               mkdir -p "$(dirname "$f")"
               cp "../patched-ref/$f" "$f"
-              echo "copiado: $f"
-            else
-              echo "AVISO: nao existe no patched-ref: $f"
             fi
           done
 
-          # Garante que o build system sabe compilar a pasta do KernelSU-Next
-          grep -q "KernelSU-Next" drivers/Makefile 2>/dev/null || echo 'obj-$(CONFIG_KSU) += KernelSU-Next/' >> drivers/Makefile
-          grep -q "KernelSU-Next" drivers/Kconfig 2>/dev/null || sed -i '/endmenu/i source "KernelSU-Next/Kconfig"' drivers/Kconfig
+          echo "=== como a referencia registra KernelSU-Next no Makefile RAIZ ==="
+          grep -n "KernelSU" ../patched-ref/Makefile
+          echo "=== como a referencia registra KernelSU-Next no Kconfig RAIZ ==="
+          grep -n "KernelSU" ../patched-ref/Kconfig
+          echo "=== contexto (5 linhas antes/depois) do Kconfig ==="
+          grep -n -B5 -A5 "KernelSU" ../patched-ref/Kconfig
 
-          # Mescla as configs do ksu.config do repo de referencia na nossa
           if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
             cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
           fi
           echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
-
-          echo "=== x1slte.config final ==="
-          cat arch/arm64/configs/x1slte.config
 
       - name: Build kernel
         working-directory: kernel-source
