@@ -13,19 +13,25 @@ jobs:
           sudo apt-get install -y build-essential flex bison bc kmod cpio \
             libssl-dev libncurses-dev rsync unzip zip python3
 
-      - name: Clone correct kernel source (paired with LineageOS 23.2)
-        run: git clone --depth=1 -b lineage-23.2 https://github.com/LineageOS/android_kernel_samsung_universal9830.git kernel-source
+      - name: Download correct kernel source (paired with LineageOS 23.2)
+        run: |
+          mkdir -p kernel-source
+          curl -L https://github.com/LineageOS/android_kernel_samsung_universal9830/archive/refs/heads/lineage-23.2.tar.gz | tar xz --strip-components=1 -C kernel-source
 
-      - name: Clone reference source (already has KernelSU-Next + SUSFS integrated)
-        run: git clone --depth=1 https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS.git patched-ref
+      - name: Download reference source (already has KernelSU-Next + SUSFS integrated)
+        run: |
+          mkdir -p patched-ref
+          curl -L https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C patched-ref
 
       - name: Download Clang toolchain (r370808)
         run: |
           mkdir -p tc/clang10
           curl -L https://github.com/Nicklas373/aosp-clang/archive/refs/heads/r370808.tar.gz | tar xz --strip-components=1 -C tc/clang10
 
-      - name: Clone GCC toolchain
-        run: git clone --depth=1 -b google https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9.git tc/gcc49
+      - name: Download GCC toolchain
+        run: |
+          mkdir -p tc/gcc49
+          curl -L https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9/archive/refs/heads/google.tar.gz | tar xz --strip-components=1 -C tc/gcc49
 
       - name: Transplant KernelSU-Next + SUSFS files onto the correct base
         run: |
