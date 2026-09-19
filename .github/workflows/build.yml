@@ -69,7 +69,7 @@ jobs:
           fi
           echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
 
-      -- name: Build kernel
+      - name: Build kernel
         working-directory: kernel-source
         run: |
           export PATH="$GITHUB_WORKSPACE/tc/clang10/bin:$GITHUB_WORKSPACE/tc/gcc49/bin:$PATH"
