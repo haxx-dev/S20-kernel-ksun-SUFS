@@ -69,16 +69,15 @@ jobs:
           fi
           echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
 
-      - name: Build kernel
+      -- name: Build kernel
         working-directory: kernel-source
         run: |
           export PATH="$GITHUB_WORKSPACE/tc/clang10/bin:$GITHUB_WORKSPACE/tc/gcc49/bin:$PATH"
-          EXTRA_FLAGS="-Wno-error=unknown-warning-option"
           make O=out ARCH=arm64 exynos9830_defconfig
           ./scripts/kconfig/merge_config.sh -O out -m out/.config arch/arm64/configs/x1slte.config
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- olddefconfig
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- \
-            KCFLAGS="$EXTRA_FLAGS" HOSTCFLAGS="$EXTRA_FLAGS" -j$(nproc)
+            KCFLAGS="-Wno-error=unknown-warning-option" -j$(nproc)
 
       - name: Upload build output
         uses: actions/upload-artifact@v4
