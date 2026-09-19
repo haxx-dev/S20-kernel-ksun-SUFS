@@ -47,12 +47,16 @@ jobs:
             fi
           done
 
-          echo "=== como a referencia registra KernelSU-Next no Makefile RAIZ ==="
-          grep -n "KernelSU" ../patched-ref/Makefile
-          echo "=== como a referencia registra KernelSU-Next no Kconfig RAIZ ==="
-          grep -n "KernelSU" ../patched-ref/Kconfig
-          echo "=== contexto (5 linhas antes/depois) do Kconfig ==="
-          grep -n -B5 -A5 "KernelSU" ../patched-ref/Kconfig
+          echo "=== Makefile RAIZ ==="
+          grep -n "KernelSU" ../patched-ref/Makefile || echo "(nada encontrado)"
+          echo "=== Kconfig RAIZ ==="
+          grep -n "KernelSU" ../patched-ref/Kconfig || echo "(nada encontrado)"
+          echo "=== drivers/Makefile ==="
+          grep -n "KernelSU" ../patched-ref/drivers/Makefile || echo "(nada encontrado)"
+          echo "=== drivers/Kconfig (com contexto) ==="
+          grep -n -B3 -A3 "KernelSU" ../patched-ref/drivers/Kconfig || echo "(nada encontrado)"
+          echo "=== busca ampla em TODO o repo por source.*KernelSU ==="
+          grep -rn "source.*KernelSU" ../patched-ref/ || echo "(nada encontrado)"
 
           if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
             cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
