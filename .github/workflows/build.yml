@@ -44,7 +44,6 @@ jobs:
                    fs/proc/cmdline.c fs/proc/fd.c fs/proc/task_mmu.c fs/proc_namespace.c \
                    fs/readdir.c fs/stat.c fs/statfs.c fs/susfs.c \
                    fs/exec.c fs/open.c fs/read_write.c \
-                   include/linux/mount.h include/linux/sched.h \
                    kernel/kallsyms.c kernel/sys.c \
                    drivers/input/input.c; do
             if [ -f "../patched-ref/$f" ]; then
@@ -53,16 +52,10 @@ jobs:
             fi
           done
 
-          echo "=== Makefile RAIZ ==="
-          grep -n "KernelSU" ../patched-ref/Makefile || echo "(nada encontrado)"
-          echo "=== Kconfig RAIZ ==="
-          grep -n "KernelSU" ../patched-ref/Kconfig || echo "(nada encontrado)"
-          echo "=== drivers/Makefile ==="
-          grep -n "KernelSU" ../patched-ref/drivers/Makefile || echo "(nada encontrado)"
-          echo "=== drivers/Kconfig (com contexto) ==="
-          grep -n -B3 -A3 "KernelSU" ../patched-ref/drivers/Kconfig || echo "(nada encontrado)"
-          echo "=== busca ampla em TODO o repo por source.*KernelSU ==="
-          grep -rn "source.*KernelSU" ../patched-ref/ || echo "(nada encontrado)"
+          echo "=== DIFF sched.h (nosso original vs referencia) ==="
+          diff -u include/linux/sched.h ../patched-ref/include/linux/sched.h | head -100
+          echo "=== DIFF mount.h (nosso original vs referencia) ==="
+          diff -u include/linux/mount.h ../patched-ref/include/linux/mount.h | head -100
 
           if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
             cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
