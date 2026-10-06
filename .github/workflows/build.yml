@@ -41,7 +41,7 @@ jobs:
 
           for f in fs/Makefile fs/dcache.c fs/namei.c fs/namespace.c \
                    fs/notify/fdinfo.c fs/overlayfs/inode.c fs/overlayfs/readdir.c fs/overlayfs/super.c \
-                   fs/proc/cmdline.c fs/proc/fd.c fs/proc/task_mmu.c fs/proc_namespace.c \
+                   fs/proc/cmdline.c fs/proc/fd.c fs/proc_namespace.c \
                    fs/readdir.c fs/stat.c fs/statfs.c fs/susfs.c \
                    fs/exec.c fs/open.c fs/read_write.c \
                    kernel/kallsyms.c kernel/sys.c \
@@ -52,7 +52,6 @@ jobs:
             fi
           done
 
-          # Corrige incompatibilidade de assinatura entre patch levels (kallsyms.c)
           sed -i 's/int kallsyms_show_value(void)/bool kallsyms_show_value(const struct cred *cred)/' kernel/kallsyms.c
           sed -i 's/iter->show_value = kallsyms_show_value();/iter->show_value = kallsyms_show_value(current_cred());/' kernel/kallsyms.c
 
@@ -69,7 +68,7 @@ jobs:
           ./scripts/kconfig/merge_config.sh -O out -m out/.config arch/arm64/configs/x1slte.config
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- olddefconfig
           make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- \
-            KCFLAGS="-Wno-error=unknown-warning-option" -j$(nproc)
+            KCFLAGS="-Wno-error=unknown-warning-option -no-integrated-as" -j$(nproc)
 
       - name: Upload build output
         uses: actions/upload-artifact@v4
