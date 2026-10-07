@@ -58,6 +58,8 @@ jobs:
           if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
             cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
           fi
+          echo "=== DIFF fs.h (nosso original vs referencia) ==="
+          diff -u include/linux/fs.h ../patched-ref/include/linux/fs.h | head -150
           echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
 
       - name: Build kernel
