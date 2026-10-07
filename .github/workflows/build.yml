@@ -55,11 +55,12 @@ jobs:
           sed -i 's/int kallsyms_show_value(void)/bool kallsyms_show_value(const struct cred *cred)/' kernel/kallsyms.c
           sed -i 's/iter->show_value = kallsyms_show_value();/iter->show_value = kallsyms_show_value(current_cred());/' kernel/kallsyms.c
 
+          echo "=== Declaracoes notify_change2 / inode_permission2 na referencia ==="
+          grep -n -B2 -A2 "notify_change2\|inode_permission2" ../patched-ref/include/linux/fs.h
+
           if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
             cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
           fi
-          echo "=== DIFF fs.h (nosso original vs referencia) ==="
-          diff -u include/linux/fs.h ../patched-ref/include/linux/fs.h | head -150
           echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
 
       - name: Build kernel
