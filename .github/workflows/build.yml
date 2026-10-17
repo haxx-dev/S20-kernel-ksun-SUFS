@@ -1,84 +1,79 @@
-name: Build S20 Kernel (LineageOS base + KernelSU-Next + SUSFS)
+name: Build S20 kernel (KSU Next + SUSFS)
 
 on:
   workflow_dispatch:
+
+env:
+  # >>> PREENCHA ESTES VALORES <<<
+  KERNEL_REPO: "https://github.com/LineageOS/android_kernel_samsung_universal9830"
+  KERNEL_COMMIT: "97369af7bbd66581d3e993fea083f3eed02d3c20"   # mesmo commit da ROM 20261016
+  DEFCONFIG: "NOME_defconfig"          # veja a lista no log do passo "Baixar fonte do kernel"
+  CLANG_REPO: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b"
+  CLANG_BRANCH: "lineage-20.0"
+  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Install dependencies
+      - name: Liberar espaco e instalar dependencias
         run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
           sudo apt-get update
-          sudo apt-get install -y build-essential flex bison bc kmod cpio \
-            libssl-dev libncurses-dev rsync unzip zip python3
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev \
+            cpio zip curl git python3 lz4 ccache
 
-      - name: Download correct kernel source (paired with LineageOS 23.2)
+      - name: Baixar fonte do kernel
         run: |
-          mkdir -p kernel-source
-          curl -L https://github.com/LineageOS/android_kernel_samsung_universal9830/archive/refs/heads/lineage-23.2.tar.gz | tar xz --strip-components=1 -C kernel-source
+          mkdir kernel && cd kernel
+          git init
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout FETCH_HEAD
+          echo "Defconfigs disponiveis:"
+          ls arch/arm64/configs | grep -i -E "x1s|9830|exynos" || true
 
-      - name: Download reference source (already has KernelSU-Next + SUSFS integrated)
+      - name: Baixar toolchain (clang do Lineage)
         run: |
-          mkdir -p patched-ref
-          curl -L https://github.com/enchantedglycerin/exynos990-KernelSU-Next-SuSFS/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C patched-ref
+          git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" toolchain
+          echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Download Clang toolchain (r370808)
+      - name: Adicionar KernelSU-Next
+        working-directory: kernel
         run: |
-          mkdir -p tc/clang10
-          curl -L https://github.com/Nicklas373/aosp-clang/archive/refs/heads/r370808.tar.gz | tar xz --strip-components=1 -C tc/clang10
+          # Confirme o comando atual no README do KernelSU-Next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-      - name: Download GCC toolchain
+      - name: Aplicar hooks e patch do SUSFS
+        working-directory: kernel
         run: |
-          mkdir -p tc/gcc49
-          curl -L https://github.com/GrowtopiaJaw/aarch64-linux-android-4.9/archive/refs/heads/google.tar.gz | tar xz --strip-components=1 -C tc/gcc49
+          # Kernel 4.19 nao GKI: os hooks e o patch do SUSFS precisam combinar
+          # com a sua fonte. Adicione aqui os "patch -p1" ou "git apply".
+          echo "TODO: hooks + SUSFS"
 
-      - name: Transplant KernelSU-Next + SUSFS files onto the correct base
+      - name: Configurar
+        working-directory: kernel
         run: |
-          cd kernel-source
-          rm -rf KernelSU-Next
-          cp -r ../patched-ref/KernelSU-Next .
+          make O=out ARCH=arm64 "$DEFCONFIG"
+          scripts/config --file out/.config -e KSU -e KSU_SUSFS
+          make O=out ARCH=arm64 olddefconfig
 
-          for f in fs/Makefile fs/dcache.c fs/namei.c fs/namespace.c \
-                   fs/notify/fdinfo.c fs/overlayfs/inode.c fs/overlayfs/readdir.c fs/overlayfs/super.c \
-                   fs/proc/cmdline.c fs/proc/fd.c fs/proc_namespace.c \
-                   fs/readdir.c fs/stat.c fs/statfs.c fs/susfs.c \
-                   fs/exec.c fs/open.c fs/read_write.c \
-                   kernel/kallsyms.c kernel/sys.c \
-                   drivers/input/input.c; do
-            if [ -f "../patched-ref/$f" ]; then
-              mkdir -p "$(dirname "$f")"
-              cp "../patched-ref/$f" "$f"
-            fi
-          done
-
-          sed -i 's/int kallsyms_show_value(void)/bool kallsyms_show_value(const struct cred *cred)/' kernel/kallsyms.c
-          sed -i 's/iter->show_value = kallsyms_show_value();/iter->show_value = kallsyms_show_value(current_cred());/' kernel/kallsyms.c
-
-          echo "=== Declaracoes notify_change2 / inode_permission2 na referencia ==="
-          grep -n -B2 -A2 "notify_change2\|inode_permission2" ../patched-ref/include/linux/fs.h
-
-          if [ -f ../patched-ref/arch/arm64/configs/ksu.config ]; then
-            cat ../patched-ref/arch/arm64/configs/ksu.config >> arch/arm64/configs/x1slte.config
-          fi
-          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/x1slte.config
-
-      - name: Build kernel
-        working-directory: kernel-source
+      - name: Compilar
+        working-directory: kernel
         run: |
-          export PATH="$GITHUB_WORKSPACE/tc/clang10/bin:$GITHUB_WORKSPACE/tc/gcc49/bin:$PATH"
-          make O=out ARCH=arm64 exynos9830_defconfig
-          ./scripts/kconfig/merge_config.sh -O out -m out/.config arch/arm64/configs/x1slte.config
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- olddefconfig
-          make O=out ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-android- \
-            KCFLAGS="-Wno-error=unknown-warning-option" \
-            KAFLAGS="-no-integrated-as" \
-            -j$(nproc)
+          make O=out ARCH=arm64 -j"$(nproc)" 2>&1 | tee build.log
 
-      - name: Upload build output
+      - name: Empacotar com AnyKernel3
+        run: |
+          git clone --depth=1 "$ANYKERNEL_REPO" ak3
+          cp kernel/out/arch/arm64/boot/Image ak3/
+          cd ak3 && zip -r9 ../kernel-ksunext-susfs.zip . -x ".git*"
+
+      - name: Enviar artefatos
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-lineage-base-g980f
+          name: kernel
           path: |
-            kernel-source/out/arch/arm64/boot/Image
-            kernel-source/out/.config
+            kernel-ksunext-susfs.zip
+            kernel/build.log
