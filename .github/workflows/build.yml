@@ -36,28 +36,23 @@ jobs:
           git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" toolchain
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Verificar se a fonte ja tem KSU
+      - name: Adicionar KernelSU-Next (branch legacy)
         working-directory: kernel
         run: |
-          echo "--- drivers com ksu no nome:"
-          ls drivers | grep -i -E "ksu|kernelsu" || echo "nenhum"
-          echo "--- Kconfig com KSU:"
-          grep -rl "config KSU" --include=Kconfig . | head || true
-          echo "--- susfs:"
-          grep -rli "susfs" --include=Kconfig . | head || echo "nenhum"
-          echo "--- conteudo do ksu.config:"
-          cat arch/arm64/configs/ksu.config
-
-      - name: Adicionar KernelSU-Next (desligado por enquanto)
-        if: false
-        working-directory: kernel
-        run: |
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          set -o pipefail
+          curl -fLSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy 2>&1 | tee ksu_setup.log
+          if grep -q "Checkout default branch" ksu_setup.log; then
+            echo "ERRO: a branch legacy nao existe, caiu na padrao"
+            exit 1
+          fi
+          echo "--- pastas e branch:"
+          for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
+          ls -la drivers | grep -i -E "ksu|kernelsu" || echo "sem link em drivers"
 
       - name: Aplicar hooks e patch do SUSFS
         working-directory: kernel
         run: |
-          echo "TODO: hooks + SUSFS"
+          echo "TODO: hooks manuais + SUSFS"
 
       - name: Configurar
         working-directory: kernel
@@ -65,6 +60,7 @@ jobs:
           make O=out $MAKE_ARGS $DEFCONFIG
           make O=out $MAKE_ARGS olddefconfig
           grep -E "CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
+          grep -q "^CONFIG_KSU=y" out/.config || { echo "ERRO: CONFIG_KSU nao entrou"; exit 1; }
 
       - name: Compilar
         working-directory: kernel
