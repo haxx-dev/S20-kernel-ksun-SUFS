@@ -47,43 +47,61 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar hooks do KSU Next e pontos de insercao
+      - name: Inspecionar assinaturas dos hooks
         working-directory: kernel
         run: |
-          echo "=== hooks que o KSU Next define (assinaturas) ==="
-          grep -rn "ksu_handle_" KernelSU-Next/kernel --include=*.h --include=*.c | head -40 || true
-          echo "=== patches ou docs de hook dentro do repo do KSU ==="
-          find KernelSU-Next -maxdepth 3 \( -iname "*.patch" -o -iname "*hook*" \) -not -path "*/.git/*" | head -30 || true
-          echo "=== kernel/reboot.c ==="
-          grep -n -E "ksu_|SYSCALL_DEFINE4\(reboot" kernel/reboot.c || true
-          sed -n '/SYSCALL_DEFINE4(reboot/,+22p' kernel/reboot.c || true
-          echo "=== fs/exec.c 1900-1970 ==="
-          sed -n 1900,1970p fs/exec.c || true
-          echo "=== fs/open.c 348-372 ==="
-          sed -n 348,372p fs/open.c || true
-          echo "=== fs/read_write.c: vfs_read e sys_read ==="
-          sed -n 441,458p fs/read_write.c || true
-          grep -n -E "SYSCALL_DEFINE3\(read," fs/read_write.c || true
-          echo "=== fs/stat.c: vfs_statx e newfstatat ==="
-          sed -n 166,185p fs/stat.c || true
-          sed -n 357,375p fs/stat.c || true
-          sed -n 507,525p fs/stat.c || true
-          echo "=== drivers/input/input.c: input_event ==="
-          sed -n '/^void input_event/,+18p' drivers/input/input.c || true
+          echo "=== Kconfig 36-52 ==="
+          sed -n 36,52p KernelSU-Next/kernel/Kconfig || true
+          echo "=== ksud.h ==="
+          cat KernelSU-Next/kernel/runtime/ksud.h || true
+          echo "=== sucompat.h ==="
+          cat KernelSU-Next/kernel/feature/sucompat.h || true
+          echo "=== definicoes dos hooks manuais ==="
+          grep -n -B2 -A4 -E "(ksu_handle_execve_ksud|ksu_handle_compat_execve_ksud|ksu_handle_vfs_read|ksu_handle_input_handle_event|ksu_handle_newfstat_ret|ksu_handle_fstat64_ret|ksu_handle_sys_read)\(" KernelSU-Next/kernel/runtime/ksud_integration.c | head -120 || true
+          echo "=== onde o modo manual e usado ==="
+          grep -rn "MANUAL_HOOK" KernelSU-Next/kernel | head -30 || true
+          echo "=== setuid ==="
+          grep -rn "setresuid\|ksu_handle_setuid" KernelSU-Next/kernel --include=*.h | head || true
           echo "=== fim da inspecao ==="
 
-      - name: Aplicar hooks e patch do SUSFS
+      - name: Hook manual 1 - kernel/reboot.c
         working-directory: kernel
         run: |
-          echo "TODO: hooks manuais + SUSFS"
+          python3 - <<'PY'
+          import sys
+          p = "kernel/reboot.c"
+          s = open(p).read()
+          if "ksu_handle_sys_reboot" in s:
+              print("hook do reboot ja existe")
+              sys.exit(0)
+          a1 = "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,"
+          if s.count(a1) != 1:
+              sys.exit("ERRO: ancora do SYSCALL_DEFINE4(reboot) nao encontrada")
+          decl = ("#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+                  "extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
+                  "#endif\n\n")
+          s = s.replace(a1, decl + a1)
+          a2 = "\tchar buffer[256];\n\tint ret = 0;\n"
+          if s.count(a2) != 1:
+              sys.exit("ERRO: ancora das variaveis nao encontrada")
+          call = ("\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+                  "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n"
+                  "#endif\n")
+          s = s.replace(a2, a2 + call)
+          open(p, "w").write(s)
+          print("hook do reboot aplicado")
+          PY
+          sed -n '/ksu_handle_sys_reboot/,+3p' kernel/reboot.c
 
       - name: Configurar
         working-directory: kernel
         run: |
           make O=out $MAKE_ARGS $DEFCONFIG
+          scripts/config --file out/.config -e KSU_MANUAL_HOOK
           make O=out $MAKE_ARGS olddefconfig
           grep -E "CONFIG_KPROBES|CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
           grep -q "^CONFIG_KSU=y" out/.config || { echo "ERRO: CONFIG_KSU nao entrou"; exit 1; }
+          grep -q "^CONFIG_KSU_MANUAL_HOOK=y" out/.config || { echo "ERRO: modo manual nao ligou"; exit 1; }
 
       - name: Compilar
         working-directory: kernel
