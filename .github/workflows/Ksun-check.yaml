@@ -1,0 +1,34 @@
+name: Inspecionar KernelSU-Next legacy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Clonar KernelSU-Next com historico completo
+        run: |
+          git clone https://github.com/KernelSU-Next/KernelSU-Next ksun
+          cd ksun
+          git checkout legacy
+          echo "shallow: $(git rev-parse --is-shallow-repository)"
+          echo "=== HEAD da legacy ==="
+          git log -1 --date=iso --format='%h %ad %s'
+          echo "=== tags recentes ==="
+          git tag --sort=-creatordate | head -15
+
+      - name: Historico recente da legacy
+        working-directory: ksun
+        run: |
+          echo "=== commits desde 01/10 ==="
+          git log legacy --since="2026-10-01" --date=iso --format='%h %ad %s' | head -60
+
+      - name: Onde fica o numero da interface (uapi)
+        working-directory: ksun
+        run: |
+          echo "=== kernel ==="
+          grep -rn -i -E "MIN_MANAGER|MANAGER_VERSION|UAPI_VERSION|KSU_API|MINIMAL_SUPPORTED" kernel --include=*.h --include=*.c --include=Kbuild | head -25 || true
+          echo "=== manager ==="
+          grep -rn -i -E "MIN_MANAGER|MINIMAL_SUPPORTED|UAPI|require_manager" manager --include=*.kt --include=*.kts --include=*.xml | head -25 || true
+          echo "=== fim ==="
