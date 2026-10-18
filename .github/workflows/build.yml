@@ -47,17 +47,25 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar hooks restantes
+      - name: Inspecionar exec, fstat, setuid e bridge
         working-directory: kernel
         run: |
-          echo "=== sucompat.c 75-135 (faccessat e stat) ==="
-          sed -n 75,135p KernelSU-Next/kernel/feature/sucompat.c || true
-          echo "=== sucompat.c 215-270 (execve) ==="
-          sed -n 215,270p KernelSU-Next/kernel/feature/sucompat.c || true
-          echo "=== ksud_integration.c 895-1045 (hooks manuais) ==="
-          sed -n 895,1045p KernelSU-Next/kernel/runtime/ksud_integration.c || true
-          echo "=== arquivos md/txt do KSU ==="
-          find KernelSU-Next -maxdepth 2 \( -iname "*.md" -o -iname "*.txt" \) -not -path "*/.git/*" | head -20 || true
+          echo "=== exec.c: syscalls de execve ==="
+          sed -n '/^SYSCALL_DEFINE3(execve/,+8p' fs/exec.c || true
+          sed -n '/^SYSCALL_DEFINE5(execveat/,+12p' fs/exec.c || true
+          sed -n '/^COMPAT_SYSCALL_DEFINE3(execve/,+8p' fs/exec.c || true
+          sed -n '/^COMPAT_SYSCALL_DEFINE5(execveat/,+12p' fs/exec.c || true
+          echo "=== stat.c: newfstat e fstat64 ==="
+          sed -n '/^SYSCALL_DEFINE2(newfstat,/,+12p' fs/stat.c || true
+          sed -n '/^SYSCALL_DEFINE2(fstat64,/,+12p' fs/stat.c || true
+          echo "=== quem chama os hooks de exec no proprio KSU ==="
+          grep -rn "ksu_handle_execveat_sucompat\|ksu_handle_execveat_ksud" KernelSU-Next/kernel | head -20 || true
+          echo "=== sulog capture (aceita argv NULL?) ==="
+          grep -rn -A14 "ksu_sulog_capture_root_execve_kern(const" KernelSU-Next/kernel | head -40 || true
+          echo "=== core/init.c: bridge ==="
+          grep -n -i "bridge\|execveat\|manual\|extern" KernelSU-Next/kernel/core/init.c | head -30 || true
+          echo "=== setuid e lsm ==="
+          grep -n -i "lsm\|security_\|setresuid\|task_fix_setuid\|inline\|manual" KernelSU-Next/kernel/hook/setuid_hook.c KernelSU-Next/kernel/hook/hook_manager.c KernelSU-Next/kernel/hook/lsm_hooks.c | head -40 || true
           echo "=== fim da inspecao ==="
 
       - name: Hook manual 1 - kernel/reboot.c
@@ -88,6 +96,64 @@ jobs:
           print("hook do reboot aplicado")
           PY
           sed -n '/ksu_handle_sys_reboot/,+3p' kernel/reboot.c
+
+      - name: Hooks manuais 2 - faccessat, stat, read, input
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          import sys
+
+          def patch(path, func_header, anchor, call, decl):
+              s = open(path).read()
+              if call.strip() in s:
+                  print(path, "ja tem o hook")
+                  return
+              n = s.count(func_header)
+              if n != 1:
+                  sys.exit("ERRO: %s: cabecalho %r aparece %d vezes" % (path, func_header, n))
+              start = s.index(func_header)
+              pos = s.find(anchor, start)
+              if pos == -1 or pos - start > 1500:
+                  sys.exit("ERRO: %s: ancora %r nao achada perto da funcao" % (path, anchor))
+              end = pos + len(anchor)
+              s = s[:end] + call + s[end:]
+              s = s[:start] + decl + s[start:]
+              open(path, "w").write(s)
+              print(path, "hook aplicado")
+
+          IF = "#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+          EI = "#endif\n"
+
+          patch("fs/open.c",
+                "long do_faccessat(int dfd, const char __user *filename, int mode)",
+                "\tunsigned int lookup_flags = LOOKUP_FOLLOW;\n",
+                "\n" + IF + "\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n" + EI,
+                IF + "extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *__unused_flags);\n" + EI + "\n")
+
+          patch("fs/read_write.c",
+                "ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)",
+                "\tssize_t ret;\n",
+                "\n" + IF + "\tksu_handle_vfs_read(&file, &buf, &count, &pos);\n" + EI,
+                IF + "extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n" + EI + "\n")
+
+          patch("fs/stat.c",
+                "int vfs_statx(int dfd, const char __user *filename, int flags,",
+                "\tunsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;\n",
+                "\n" + IF + "\tksu_handle_stat(&dfd, &filename, &flags);\n" + EI,
+                IF + "extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);\n" + EI + "\n")
+
+          patch("drivers/input/input.c",
+                "void input_event(struct input_dev *dev,",
+                "\tunsigned long flags;\n",
+                "\n" + IF + "\tksu_handle_input_handle_event(&type, &code, &value);\n" + EI,
+                IF + "extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\n" + EI + "\n")
+          PY
+          git diff --stat
+
+      - name: Aplicar patch do SUSFS
+        working-directory: kernel
+        run: |
+          echo "TODO: SUSFS"
 
       - name: Configurar
         working-directory: kernel
