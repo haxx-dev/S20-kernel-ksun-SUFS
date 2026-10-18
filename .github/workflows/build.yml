@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
 
 env:
-  # >>> PREENCHA ESTES VALORES <<<
   KERNEL_REPO: "https://github.com/LineageOS/android_kernel_samsung_universal9830"
-  KERNEL_COMMIT: "97369af7bbd66581d3e993fea083f3eed02d3c20"   # mesmo commit da ROM 20261016
-  DEFCONFIG: "NOME_defconfig"          # veja a lista no log do passo "Baixar fonte do kernel"
+  KERNEL_COMMIT: "97369af7bbd66581d3e993fea083f3eed02d3c20"
+  DEFCONFIG: "exynos9830_defconfig x1s.config ksu.config"
+  MAKE_ARGS: "ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
   CLANG_REPO: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b"
   CLANG_BRANCH: "lineage-20.0"
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
@@ -21,7 +21,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
           sudo apt-get update
           sudo apt-get install -y bc bison flex libssl-dev libelf-dev \
-            cpio zip curl git python3 lz4 ccache
+            cpio zip curl git python3 lz4 ccache gcc-aarch64-linux-gnu
 
       - name: Baixar fonte do kernel
         run: |
@@ -30,38 +30,47 @@ jobs:
           git remote add origin "$KERNEL_REPO"
           git fetch --depth=1 origin "$KERNEL_COMMIT"
           git checkout FETCH_HEAD
-          echo "Defconfigs disponiveis:"
-          ls arch/arm64/configs | grep -i -E "x1s|9830|exynos" || true
 
       - name: Baixar toolchain (clang do Lineage)
         run: |
           git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" toolchain
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
-      - name: Adicionar KernelSU-Next
+      - name: Verificar se a fonte ja tem KSU
         working-directory: kernel
         run: |
-          # Confirme o comando atual no README do KernelSU-Next
+          echo "--- drivers com ksu no nome:"
+          ls drivers | grep -i -E "ksu|kernelsu" || echo "nenhum"
+          echo "--- Kconfig com KSU:"
+          grep -rl "config KSU" --include=Kconfig . | head || true
+          echo "--- susfs:"
+          grep -rli "susfs" --include=Kconfig . | head || echo "nenhum"
+          echo "--- conteudo do ksu.config:"
+          cat arch/arm64/configs/ksu.config
+
+      - name: Adicionar KernelSU-Next (desligado por enquanto)
+        if: false
+        working-directory: kernel
+        run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
       - name: Aplicar hooks e patch do SUSFS
         working-directory: kernel
         run: |
-          # Kernel 4.19 nao GKI: os hooks e o patch do SUSFS precisam combinar
-          # com a sua fonte. Adicione aqui os "patch -p1" ou "git apply".
           echo "TODO: hooks + SUSFS"
 
       - name: Configurar
         working-directory: kernel
         run: |
-          make O=out ARCH=arm64 "$DEFCONFIG"
-          scripts/config --file out/.config -e KSU -e KSU_SUSFS
-          make O=out ARCH=arm64 olddefconfig
+          make O=out $MAKE_ARGS $DEFCONFIG
+          make O=out $MAKE_ARGS olddefconfig
+          grep -E "CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
 
       - name: Compilar
         working-directory: kernel
         run: |
-          make O=out ARCH=arm64 -j"$(nproc)" 2>&1 | tee build.log
+          set -o pipefail
+          make O=out $MAKE_ARGS -j"$(nproc)" 2>&1 | tee build.log
 
       - name: Empacotar com AnyKernel3
         run: |
