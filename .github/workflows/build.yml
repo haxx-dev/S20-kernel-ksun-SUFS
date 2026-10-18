@@ -49,6 +49,17 @@ jobs:
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
           ls -la drivers | grep -i -E "ksu|kernelsu" || echo "sem link em drivers"
 
+      - name: Inspecionar KSU Next e pontos de hook
+        working-directory: kernel
+        run: |
+          echo "=== Kbuild linhas 190 a 215 ==="
+          sed -n 190,215p drivers/kernelsu/Kbuild || true
+          echo "=== Kconfig do KSU: opcoes e hooks ==="
+          grep -n -i -E "^config|hook|kprobe" KernelSU-Next/kernel/Kconfig || true
+          echo "=== funcoes alvo dos hooks ==="
+          grep -n -E "do_execveat_common|do_faccessat|faccessat|vfs_read\(|vfs_statx|newfstatat|fstatat64|input_handle_event" fs/exec.c fs/open.c fs/read_write.c fs/stat.c drivers/input/input.c || true
+          echo "=== fim da inspecao ==="
+
       - name: Aplicar hooks e patch do SUSFS
         working-directory: kernel
         run: |
@@ -67,6 +78,15 @@ jobs:
         run: |
           set -o pipefail
           make O=out $MAKE_ARGS -j"$(nproc)" 2>&1 | tee build.log
+
+      - name: Mostrar erros da compilacao
+        if: failure()
+        working-directory: kernel
+        run: |
+          echo "=== linhas com erro ==="
+          grep -n -i -E "error|\*\*\*|fatal|undefined|No rule" build.log | head -40 || true
+          echo "=== final do log ==="
+          tail -n 40 build.log || true
 
       - name: Empacotar com AnyKernel3
         run: |
