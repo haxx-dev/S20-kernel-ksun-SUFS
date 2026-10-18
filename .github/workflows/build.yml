@@ -47,21 +47,17 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar assinaturas dos hooks
+      - name: Inspecionar hooks restantes
         working-directory: kernel
         run: |
-          echo "=== Kconfig 36-52 ==="
-          sed -n 36,52p KernelSU-Next/kernel/Kconfig || true
-          echo "=== ksud.h ==="
-          cat KernelSU-Next/kernel/runtime/ksud.h || true
-          echo "=== sucompat.h ==="
-          cat KernelSU-Next/kernel/feature/sucompat.h || true
-          echo "=== definicoes dos hooks manuais ==="
-          grep -n -B2 -A4 -E "(ksu_handle_execve_ksud|ksu_handle_compat_execve_ksud|ksu_handle_vfs_read|ksu_handle_input_handle_event|ksu_handle_newfstat_ret|ksu_handle_fstat64_ret|ksu_handle_sys_read)\(" KernelSU-Next/kernel/runtime/ksud_integration.c | head -120 || true
-          echo "=== onde o modo manual e usado ==="
-          grep -rn "MANUAL_HOOK" KernelSU-Next/kernel | head -30 || true
-          echo "=== setuid ==="
-          grep -rn "setresuid\|ksu_handle_setuid" KernelSU-Next/kernel --include=*.h | head || true
+          echo "=== sucompat.c 75-135 (faccessat e stat) ==="
+          sed -n 75,135p KernelSU-Next/kernel/feature/sucompat.c || true
+          echo "=== sucompat.c 215-270 (execve) ==="
+          sed -n 215,270p KernelSU-Next/kernel/feature/sucompat.c || true
+          echo "=== ksud_integration.c 895-1045 (hooks manuais) ==="
+          sed -n 895,1045p KernelSU-Next/kernel/runtime/ksud_integration.c || true
+          echo "=== arquivos md/txt do KSU ==="
+          find KernelSU-Next -maxdepth 2 \( -iname "*.md" -o -iname "*.txt" \) -not -path "*/.git/*" | head -20 || true
           echo "=== fim da inspecao ==="
 
       - name: Hook manual 1 - kernel/reboot.c
