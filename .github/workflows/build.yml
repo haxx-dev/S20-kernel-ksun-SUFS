@@ -45,19 +45,31 @@ jobs:
             echo "ERRO: a branch legacy nao existe, caiu na padrao"
             exit 1
           fi
-          echo "--- pastas e branch:"
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
-          ls -la drivers | grep -i -E "ksu|kernelsu" || echo "sem link em drivers"
 
-      - name: Inspecionar KSU Next e pontos de hook
+      - name: Inspecionar hooks do KSU Next e pontos de insercao
         working-directory: kernel
         run: |
-          echo "=== Kbuild linhas 190 a 215 ==="
-          sed -n 190,215p drivers/kernelsu/Kbuild || true
-          echo "=== Kconfig do KSU: opcoes e hooks ==="
-          grep -n -i -E "^config|hook|kprobe" KernelSU-Next/kernel/Kconfig || true
-          echo "=== funcoes alvo dos hooks ==="
-          grep -n -E "do_execveat_common|do_faccessat|faccessat|vfs_read\(|vfs_statx|newfstatat|fstatat64|input_handle_event" fs/exec.c fs/open.c fs/read_write.c fs/stat.c drivers/input/input.c || true
+          echo "=== hooks que o KSU Next define (assinaturas) ==="
+          grep -rn "ksu_handle_" KernelSU-Next/kernel --include=*.h --include=*.c | head -40 || true
+          echo "=== patches ou docs de hook dentro do repo do KSU ==="
+          find KernelSU-Next -maxdepth 3 \( -iname "*.patch" -o -iname "*hook*" \) -not -path "*/.git/*" | head -30 || true
+          echo "=== kernel/reboot.c ==="
+          grep -n -E "ksu_|SYSCALL_DEFINE4\(reboot" kernel/reboot.c || true
+          sed -n '/SYSCALL_DEFINE4(reboot/,+22p' kernel/reboot.c || true
+          echo "=== fs/exec.c 1900-1970 ==="
+          sed -n 1900,1970p fs/exec.c || true
+          echo "=== fs/open.c 348-372 ==="
+          sed -n 348,372p fs/open.c || true
+          echo "=== fs/read_write.c: vfs_read e sys_read ==="
+          sed -n 441,458p fs/read_write.c || true
+          grep -n -E "SYSCALL_DEFINE3\(read," fs/read_write.c || true
+          echo "=== fs/stat.c: vfs_statx e newfstatat ==="
+          sed -n 166,185p fs/stat.c || true
+          sed -n 357,375p fs/stat.c || true
+          sed -n 507,525p fs/stat.c || true
+          echo "=== drivers/input/input.c: input_event ==="
+          sed -n '/^void input_event/,+18p' drivers/input/input.c || true
           echo "=== fim da inspecao ==="
 
       - name: Aplicar hooks e patch do SUSFS
@@ -70,7 +82,7 @@ jobs:
         run: |
           make O=out $MAKE_ARGS $DEFCONFIG
           make O=out $MAKE_ARGS olddefconfig
-          grep -E "CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
+          grep -E "CONFIG_KPROBES|CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
           grep -q "^CONFIG_KSU=y" out/.config || { echo "ERRO: CONFIG_KSU nao entrou"; exit 1; }
 
       - name: Compilar
