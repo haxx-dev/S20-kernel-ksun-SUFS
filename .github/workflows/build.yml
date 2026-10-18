@@ -56,12 +56,14 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar sulog capture
+      - name: Fixar KernelSU-Next no ultimo commit com interface 5
         working-directory: kernel
         run: |
-          echo "=== ksu_sulog_capture ==="
-          grep -n -A45 -E "^(static )?struct ksu_sulog_pending_event \*ksu_sulog_capture\(" KernelSU-Next/kernel/sulog/event.c | head -80 || true
-          echo "=== fim da inspecao ==="
+          git -C KernelSU-Next fetch --unshallow 2>/dev/null || git -C KernelSU-Next fetch --all 2>/dev/null || true
+          git -C KernelSU-Next checkout 465490a2
+          git -C KernelSU-Next log -1 --date=iso --format='%h %ad %s'
+          grep -n "define KERNEL_SU_UAPI_VERSION" KernelSU-Next/uapi/supercall.h
+          grep -q "define KERNEL_SU_UAPI_VERSION 5" KernelSU-Next/uapi/supercall.h || { echo "ERRO: a interface nao e 5"; exit 1; }
 
       - name: Hook manual 1 - kernel/reboot.c
         working-directory: kernel
@@ -216,7 +218,6 @@ jobs:
             echo "nao consegui baixar o boot.img do Lineage; pulando a comparacao"
             exit 0
           fi
-          ls -l /tmp/lineage_boot.img
           scripts/extract-ikconfig /tmp/lineage_boot.img > /tmp/lineage.config || true
           if [ ! -s /tmp/lineage.config ]; then echo "nao extraiu a config; pulando"; exit 0; fi
           grep -E '^(CONFIG_|# CONFIG_)' /tmp/lineage.config | sort > /tmp/a.txt
@@ -246,7 +247,8 @@ jobs:
           ls -l out/arch/arm64/boot/Image
           echo "Image original do Lineage: 42313744 bytes"
           cat out/include/config/kernel.release
-          strings out/arch/arm64/boot/Image | grep -m1 "Linux version" || true
+          echo "--- interface do KSU compilada:"
+          grep -n "define KERNEL_SU_UAPI_VERSION" KernelSU-Next/uapi/supercall.h
           echo "--- config dentro do Image:"
           scripts/extract-ikconfig out/arch/arm64/boot/Image > /tmp/ours.config 2>/dev/null || true
           grep -E "^CONFIG_(KSU|KSU_MANUAL_HOOK|MODEL_X1S|LTO_CLANG|THINLTO)=" /tmp/ours.config || echo "ikconfig nao extraido"
