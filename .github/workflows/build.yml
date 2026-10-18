@@ -47,25 +47,13 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar exec, fstat, setuid e bridge
+      - name: Inspecionar ponte do exec (core/init.c)
         working-directory: kernel
         run: |
-          echo "=== exec.c: syscalls de execve ==="
-          sed -n '/^SYSCALL_DEFINE3(execve/,+8p' fs/exec.c || true
-          sed -n '/^SYSCALL_DEFINE5(execveat/,+12p' fs/exec.c || true
-          sed -n '/^COMPAT_SYSCALL_DEFINE3(execve/,+8p' fs/exec.c || true
-          sed -n '/^COMPAT_SYSCALL_DEFINE5(execveat/,+12p' fs/exec.c || true
-          echo "=== stat.c: newfstat e fstat64 ==="
-          sed -n '/^SYSCALL_DEFINE2(newfstat,/,+12p' fs/stat.c || true
-          sed -n '/^SYSCALL_DEFINE2(fstat64,/,+12p' fs/stat.c || true
-          echo "=== quem chama os hooks de exec no proprio KSU ==="
-          grep -rn "ksu_handle_execveat_sucompat\|ksu_handle_execveat_ksud" KernelSU-Next/kernel | head -20 || true
-          echo "=== sulog capture (aceita argv NULL?) ==="
-          grep -rn -A14 "ksu_sulog_capture_root_execve_kern(const" KernelSU-Next/kernel | head -40 || true
-          echo "=== core/init.c: bridge ==="
-          grep -n -i "bridge\|execveat\|manual\|extern" KernelSU-Next/kernel/core/init.c | head -30 || true
-          echo "=== setuid e lsm ==="
-          grep -n -i "lsm\|security_\|setresuid\|task_fix_setuid\|inline\|manual" KernelSU-Next/kernel/hook/setuid_hook.c KernelSU-Next/kernel/hook/hook_manager.c KernelSU-Next/kernel/hook/lsm_hooks.c | head -40 || true
+          echo "=== core/init.c 20-60 ==="
+          sed -n 20,60p KernelSU-Next/kernel/core/init.c || true
+          echo "=== __do_execve_file (inicio) ==="
+          sed -n '/^static int __do_execve_file(/,+28p' fs/exec.c || true
           echo "=== fim da inspecao ==="
 
       - name: Hook manual 1 - kernel/reboot.c
@@ -95,7 +83,6 @@ jobs:
           open(p, "w").write(s)
           print("hook do reboot aplicado")
           PY
-          sed -n '/ksu_handle_sys_reboot/,+3p' kernel/reboot.c
 
       - name: Hooks manuais 2 - faccessat, stat, read, input
         working-directory: kernel
@@ -148,7 +135,57 @@ jobs:
                 "\n" + IF + "\tksu_handle_input_handle_event(&type, &code, &value);\n" + EI,
                 IF + "extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\n" + EI + "\n")
           PY
+
+      - name: Hooks manuais 3 - exec e fstat
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          import sys
+
+          def patch(path, header, anchor, text, decl, span=1500):
+              s = open(path).read()
+              if text.strip() in s:
+                  print(path, "ja tem o hook")
+                  return
+              n = s.count(header)
+              if n != 1:
+                  sys.exit("ERRO: %s: cabecalho %r aparece %d vezes" % (path, header, n))
+              start = s.index(header)
+              pos = s.find(anchor, start)
+              if pos == -1 or pos - start > span:
+                  sys.exit("ERRO: %s: ancora %r nao achada perto da funcao" % (path, anchor))
+              at = pos + len(anchor)
+              s = s[:at] + text + s[at:]
+              s = s[:start] + decl + s[start:]
+              open(path, "w").write(s)
+              print(path, "hook aplicado")
+
+          IF = "#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+          EI = "#endif\n"
+
+          patch("fs/exec.c",
+                "static int __do_execve_file(int fd, struct filename *filename,",
+                "\tif (IS_ERR(filename))\n\t\treturn PTR_ERR(filename);\n",
+                "\n" + IF + "\tif (filename)\n\t\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n" + EI,
+                IF + "extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n" + EI + "\n",
+                span=1200)
+
+          patch("fs/stat.c",
+                "SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)",
+                "\t\terror = cp_new_stat(&stat, statbuf);\n",
+                "\n" + IF + "\tksu_handle_newfstat_ret(&fd, &statbuf);\n" + EI,
+                IF + "extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);\n" + EI + "\n",
+                span=400)
+
+          patch("fs/stat.c",
+                "SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)",
+                "\t\terror = cp_new_stat64(&stat, statbuf);\n",
+                "\n" + IF + "\tksu_handle_fstat64_ret(&fd, &statbuf);\n" + EI,
+                IF + "extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr);\n" + EI + "\n",
+                span=400)
+          PY
           git diff --stat
+          git diff fs/exec.c fs/stat.c | head -90
 
       - name: Aplicar patch do SUSFS
         working-directory: kernel
@@ -165,11 +202,30 @@ jobs:
           grep -q "^CONFIG_KSU=y" out/.config || { echo "ERRO: CONFIG_KSU nao entrou"; exit 1; }
           grep -q "^CONFIG_KSU_MANUAL_HOOK=y" out/.config || { echo "ERRO: modo manual nao ligou"; exit 1; }
 
+      - name: Conferir config contra a do Lineage
+        working-directory: kernel
+        run: |
+          for l in 'CONFIG_MODEL_X1S=y' 'CONFIG_LTO_CLANG=y' 'CONFIG_MODULES=y' 'CONFIG_CMDLINE_EXTEND=y' 'CONFIG_CMDLINE="androidboot.boot_devices=13100000.ufs cgroup_disable=pressure"' 'CONFIG_CLANG_VERSION=120005' '# CONFIG_KPROBES is not set'; do
+            if grep -qxF "$l" out/.config; then echo "ok: $l"; else echo "DIFERE: $l"; fi
+          done
+
       - name: Compilar
         working-directory: kernel
         run: |
           set -o pipefail
           make O=out $MAKE_ARGS -j"$(nproc)" 2>&1 | tee build.log
+
+      - name: Verificar kernel gerado
+        working-directory: kernel
+        run: |
+          ls -l out/arch/arm64/boot/Image
+          echo "Image original do Lineage: 42313744 bytes"
+          cat out/include/config/kernel.release
+          strings out/arch/arm64/boot/Image | grep -m1 "Linux version" || true
+          echo "--- config dentro do Image:"
+          scripts/extract-ikconfig out/arch/arm64/boot/Image | grep -E "^CONFIG_(KSU|KSU_MANUAL_HOOK|MODEL_X1S|LTO_CLANG)=" || echo "ikconfig nao extraido"
+          echo "--- hooks linkados (esperado: 8):"
+          grep -E " ksu_handle_(execveat|sys_reboot|faccessat|stat|vfs_read|input_handle_event|newfstat_ret|fstat64_ret)$" out/System.map || true
 
       - name: Mostrar erros da compilacao
         if: failure()
@@ -180,11 +236,49 @@ jobs:
           echo "=== final do log ==="
           tail -n 40 build.log || true
 
-      - name: Empacotar com AnyKernel3
+      - name: Empacotar com AnyKernel3 (x1s, boot, sem A/B)
         run: |
           git clone --depth=1 "$ANYKERNEL_REPO" ak3
-          cp kernel/out/arch/arm64/boot/Image ak3/
-          cd ak3 && zip -r9 ../kernel-ksunext-susfs.zip . -x ".git*"
+          rm -rf ak3/.git ak3/README.md
+          cat > ak3/anykernel.sh <<'EOF'
+          ### AnyKernel3 - KernelSU-Next legacy (manual hooks) - Galaxy S20 x1s
+          properties() { '
+          kernel.string=KernelSU-Next legacy for Galaxy S20 (x1s) on LineageOS 24
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=x1s
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          block=boot;
+          for p in /dev/block/by-name/boot /dev/block/platform/13100000.ufs/by-name/boot /dev/block/bootdevice/by-name/boot; do
+            if [ -e "$p" ]; then block=$p; break; fi;
+          done;
+          BLOCK=$block;
+          is_slot_device=0;
+          IS_SLOT_DEVICE=0;
+          ramdisk_compression=auto;
+          RAMDISK_COMPRESSION=auto;
+          patch_vbmeta_flag=0;
+          PATCH_VBMETA_FLAG=0;
+
+          . tools/ak3-core.sh;
+
+          split_boot;
+          flash_boot;
+          EOF
+          cp kernel/out/arch/arm64/boot/Image ak3/Image
+          cd ak3 && zip -r9 ../kernel-ksunext-x1s.zip . -x ".git*"
+          unzip -l ../kernel-ksunext-x1s.zip | tail -n 15
 
       - name: Enviar artefatos
         if: always()
@@ -192,5 +286,5 @@ jobs:
         with:
           name: kernel
           path: |
-            kernel-ksunext-susfs.zip
+            kernel-ksunext-x1s.zip
             kernel/build.log
