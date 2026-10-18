@@ -7,7 +7,7 @@ env:
   KERNEL_REPO: "https://github.com/LineageOS/android_kernel_samsung_universal9830"
   KERNEL_COMMIT: "97369af7bbd66581d3e993fea083f3eed02d3c20"
   DEFCONFIG: "exynos9830_defconfig x1s.config ksu.config"
-  MAKE_ARGS: "ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
+  MAKE_ARGS: "ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
   CLANG_REPO: "https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b"
   CLANG_BRANCH: "lineage-20.0"
   ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
@@ -36,6 +36,15 @@ jobs:
           git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" toolchain
           echo "$PWD/toolchain/bin" >> "$GITHUB_PATH"
 
+      - name: Conferir ferramentas LLVM do toolchain
+        run: |
+          fail=
+          for t in clang ld.lld llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
+            if [ -x "toolchain/bin/$t" ]; then echo "ok: $t"; else echo "FALTA: $t"; fail=1; fi
+          done
+          ld.lld --version || true
+          [ -z "$fail" ] || exit 1
+
       - name: Adicionar KernelSU-Next (branch legacy)
         working-directory: kernel
         run: |
@@ -47,13 +56,11 @@ jobs:
           fi
           for d in KernelSU*; do echo "$d"; git -C "$d" branch --show-current; done
 
-      - name: Inspecionar ponte do exec (core/init.c)
+      - name: Inspecionar sulog capture
         working-directory: kernel
         run: |
-          echo "=== core/init.c 20-60 ==="
-          sed -n 20,60p KernelSU-Next/kernel/core/init.c || true
-          echo "=== __do_execve_file (inicio) ==="
-          sed -n '/^static int __do_execve_file(/,+28p' fs/exec.c || true
+          echo "=== ksu_sulog_capture ==="
+          grep -n -A45 -E "^(static )?struct ksu_sulog_pending_event \*ksu_sulog_capture\(" KernelSU-Next/kernel/sulog/event.c | head -80 || true
           echo "=== fim da inspecao ==="
 
       - name: Hook manual 1 - kernel/reboot.c
@@ -185,7 +192,6 @@ jobs:
                 span=400)
           PY
           git diff --stat
-          git diff fs/exec.c fs/stat.c | head -90
 
       - name: Aplicar patch do SUSFS
         working-directory: kernel
@@ -198,16 +204,35 @@ jobs:
           make O=out $MAKE_ARGS $DEFCONFIG
           scripts/config --file out/.config -e KSU_MANUAL_HOOK
           make O=out $MAKE_ARGS olddefconfig
-          grep -E "CONFIG_KPROBES|CONFIG_KSU|CONFIG_MODEL_X1S" out/.config || true
+          grep -E "CONFIG_KPROBES|CONFIG_KSU|CONFIG_MODEL_X1S|CONFIG_LTO|CONFIG_LD_IS_LLD" out/.config || true
           grep -q "^CONFIG_KSU=y" out/.config || { echo "ERRO: CONFIG_KSU nao entrou"; exit 1; }
           grep -q "^CONFIG_KSU_MANUAL_HOOK=y" out/.config || { echo "ERRO: modo manual nao ligou"; exit 1; }
+
+      - name: Comparar config completa com o boot.img oficial
+        continue-on-error: true
+        working-directory: kernel
+        run: |
+          if ! curl -fL -o /tmp/lineage_boot.img "https://mirrorbits.lineageos.org/full/x1s/20261016/boot.img"; then
+            echo "nao consegui baixar o boot.img do Lineage; pulando a comparacao"
+            exit 0
+          fi
+          ls -l /tmp/lineage_boot.img
+          scripts/extract-ikconfig /tmp/lineage_boot.img > /tmp/lineage.config || true
+          if [ ! -s /tmp/lineage.config ]; then echo "nao extraiu a config; pulando"; exit 0; fi
+          grep -E '^(CONFIG_|# CONFIG_)' /tmp/lineage.config | sort > /tmp/a.txt
+          grep -E '^(CONFIG_|# CONFIG_)' out/.config | sort > /tmp/b.txt
+          echo "=== diferencas (< Lineage, > nosso), sem as linhas de KSU ==="
+          diff /tmp/a.txt /tmp/b.txt | grep -v "CONFIG_KSU" | head -60 || true
+          echo "=== fim da comparacao ==="
 
       - name: Conferir config contra a do Lineage
         working-directory: kernel
         run: |
-          for l in 'CONFIG_MODEL_X1S=y' 'CONFIG_LTO_CLANG=y' 'CONFIG_MODULES=y' 'CONFIG_CMDLINE_EXTEND=y' 'CONFIG_CMDLINE="androidboot.boot_devices=13100000.ufs cgroup_disable=pressure"' 'CONFIG_CLANG_VERSION=120005' '# CONFIG_KPROBES is not set'; do
-            if grep -qxF "$l" out/.config; then echo "ok: $l"; else echo "DIFERE: $l"; fi
+          bad=
+          for l in 'CONFIG_MODEL_X1S=y' 'CONFIG_LD_IS_LLD=y' 'CONFIG_LTO_CLANG=y' 'CONFIG_THINLTO=y' 'CONFIG_RELR=y' 'CONFIG_MODULES=y' 'CONFIG_CMDLINE_EXTEND=y' 'CONFIG_CMDLINE="androidboot.boot_devices=13100000.ufs cgroup_disable=pressure"' 'CONFIG_CLANG_VERSION=120005' '# CONFIG_KPROBES is not set'; do
+            if grep -qxF "$l" out/.config; then echo "ok: $l"; else echo "DIFERE: $l"; bad=1; fi
           done
+          [ -z "$bad" ] || { echo "ERRO: config diferente da do Lineage, parando antes de compilar"; exit 1; }
 
       - name: Compilar
         working-directory: kernel
@@ -223,7 +248,8 @@ jobs:
           cat out/include/config/kernel.release
           strings out/arch/arm64/boot/Image | grep -m1 "Linux version" || true
           echo "--- config dentro do Image:"
-          scripts/extract-ikconfig out/arch/arm64/boot/Image | grep -E "^CONFIG_(KSU|KSU_MANUAL_HOOK|MODEL_X1S|LTO_CLANG)=" || echo "ikconfig nao extraido"
+          scripts/extract-ikconfig out/arch/arm64/boot/Image > /tmp/ours.config 2>/dev/null || true
+          grep -E "^CONFIG_(KSU|KSU_MANUAL_HOOK|MODEL_X1S|LTO_CLANG|THINLTO)=" /tmp/ours.config || echo "ikconfig nao extraido"
           echo "--- hooks linkados (esperado: 8):"
           grep -E " ksu_handle_(execveat|sys_reboot|faccessat|stat|vfs_read|input_handle_event|newfstat_ret|fstat64_ret)$" out/System.map || true
 
